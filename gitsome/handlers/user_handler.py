@@ -58,6 +58,7 @@ def get_user_query(username: str) -> str:
                   name
                 }}
                 size
+                text
               }}
               comments(first: 100) {{
                 totalCount
@@ -372,9 +373,6 @@ def generate_markdown_report_user(data: Dict[str, Any], username: str, client=No
 
 def print_user_info(data: Dict[str, Any], username: str, client=None, print_gists: bool = False) -> None:
     """Print formatted user information"""
-    print(f"gitSome - gitHub Info Enumerator, by savant42 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-    print("User Enumeration Module")
-    
     user = data.get('data', {}).get('user')
     if not user:
         print("Error: User not found or not accessible")
@@ -398,33 +396,45 @@ def print_user_info(data: Dict[str, Any], username: str, client=None, print_gist
     print(f"Total Gist Comments: {user.get('gistComments', {}).get('totalCount', 0)}")
     
     repos = user.get('repositories', {}).get('edges', [])
-    print(f"\n[+] Repositories for {username}: {user.get('repositories', {}).get('totalCount', 0)} \n---")
+    print(f"\n[+] Repositories for {username}: {user.get('repositories', {}).get('totalCount', 0)}")
     for repo_edge in repos:
         repo = repo_edge.get('node', {})
-        print(f"Repository Name: {repo.get('name')}")
-        print(f"Description: {repo.get('description', 'N/A')}")
-        print(f"Disk Usage: {repo.get('diskUsage', 'N/A')}")
-        print(f"HTTPS URL: {repo.get('url')}")
-        print(f"SSH URL: {repo.get('sshUrl')}")
-        print(f"Homepage: {repo.get('homepageUrl', 'N/A')}")
-        print(f"GitWiki: {repo.get('hasWikiEnabled')}")
-        print(f"Stargazer Count: {repo.get('stargazerCount', 0)}")
-        print(f"Is In Org: {repo.get('isInOrganization')}")
-        print(f"Fork Count: {repo.get('forkCount', 0)}")
-        print(f"Is Fork: {repo.get('isFork')}")
-        print(f"Is Empty: {repo.get('isEmpty')}")
-        print("---")
-    
-    print(f"\n[+] Repos Clone URL List (HTTPS):\n---")
-    for repo_edge in repos:
-        repo = repo_edge.get('node', {})
-        print(f"{repo.get('url')}.git")
+        repo_name = repo.get('name', 'N/A')
+        description = repo.get('description') or 'None'
+        disk_usage = repo.get('diskUsage', 'N/A')
+        url = repo.get('url', 'N/A')
+        homepage = repo.get('homepageUrl') or 'None'
+        wiki = repo.get('hasWikiEnabled', False)
+        stars = repo.get('stargazerCount', 0)
+        in_org = repo.get('isInOrganization', False)
+        fork_count = repo.get('forkCount', 0)
+        is_fork = repo.get('isFork', False)
+        is_empty = repo.get('isEmpty', False)
+        
+        # Format: Name | Description | Stats
+        stats_parts = []
+        if stars > 0:
+            stats_parts.append(f"⭐ {stars}")
+        if fork_count > 0:
+            stats_parts.append(f"🍴 {fork_count}")
+        if is_fork:
+            stats_parts.append("Fork")
+        if is_empty:
+            stats_parts.append("Empty")
+        stats_str = " | ".join(stats_parts) if stats_parts else "No stats"
+        
+        print(f"  {repo_name}")
+        print(f"    Description: {description}")
+        print(f"    URL: {url}")
+        if homepage != 'None':
+            print(f"    Homepage: {homepage}")
+        print(f"    Disk: {disk_usage} | Wiki: {wiki} | Org: {in_org} | {stats_str}")
     
     gists = user.get('gists', {}).get('edges', [])
     gist_count = user.get('gists', {}).get('totalCount', 0)
     print(f"\n[+] Gists from {username}: {gist_count}")
     
-    if print_gists and gists:
+    if gists:
         print("")
         # Summary table
         print(f"{'ID':<12} {'Name':<30} {'Public':<8} {'Fork':<6} {'Stars':<6} {'Created':<20} {'URL':<50}")
@@ -476,6 +486,18 @@ def print_user_info(data: Dict[str, Any], username: str, client=None, print_gist
                     is_image = str(file.get('isImage', False))[:6]
                     is_truncated = str(file.get('isTruncated', False))[:8]
                     print(f"    {file_name:<30} {extension:<12} {language:<15} {size:<10} {encoding:<10} {is_image:<8} {is_truncated:<10}")
+                    
+                    # Display file content for plain text files
+                    file_text = file.get('text')
+                    if file_text and not file.get('isImage', False) and not file.get('isTruncated', False):
+                        print(f"    Content:")
+                        # Split into lines and indent each line
+                        content_lines = file_text.split('\n')
+                        for line in content_lines[:100]:  # Limit to first 100 lines to avoid huge output
+                            print(f"      {line}")
+                        if len(content_lines) > 100:
+                            print(f"      ... ({len(content_lines) - 100} more lines)")
+                        print()
             
             # Comments
             comments = gist.get('comments', {})

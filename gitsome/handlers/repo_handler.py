@@ -9,8 +9,23 @@ from typing import Dict, Any, Optional
 from gitsome.client import GitHubGraphQLClient
 
 
-def get_repo_query(owner: str, repo_name: str, default_branch: str = None) -> str:
+def get_repo_query(owner: str, repo_name: str, default_branch: str = None, include_stargazers: bool = False) -> str:
     """Generate GraphQL query for repository details"""
+    stargazers_section = ""
+    if include_stargazers:
+        stargazers_section = """
+        stargazerCount
+        stargazers(last: 10) {{
+          totalCount
+          nodes {{
+            name
+            login
+            email
+            company
+            url
+          }}
+        }}"""
+    
     return f"""
     query {{
       repository(owner: "{owner}", name: "{repo_name}") {{
@@ -68,7 +83,6 @@ def get_repo_query(owner: str, repo_name: str, default_branch: str = None) -> st
           nodes {{
             name
             login
-            email
             company
             location
             pronouns
@@ -153,18 +167,7 @@ def get_repo_query(owner: str, repo_name: str, default_branch: str = None) -> st
             databaseId
             resourcePath
           }}
-        }}
-        stargazerCount
-        stargazers(last: 10) {{
-          totalCount
-          nodes {{
-            name
-            login
-            email
-            company
-            url
-          }}
-        }}
+        }}{stargazers_section}
         defaultBranchRef {{
           name
           target {{
@@ -179,6 +182,10 @@ def get_repo_query(owner: str, repo_name: str, default_branch: str = None) -> st
           ... on Commit {{
             history(first: 100) {{
               totalCount
+              pageInfo {{
+                endCursor
+                hasNextPage
+              }}
               nodes {{
                 author {{
                   name
@@ -226,7 +233,7 @@ def build_branch_comparison_query(owner: str, repo_name: str, base_branch: str, 
     """
 
 
-def generate_markdown_report(data: Dict[str, Any], owner: str, repo_name: str) -> str:
+def generate_markdown_report(data: Dict[str, Any], owner: str, repo_name: str, client: Optional["GitHubGraphQLClient"] = None, print_stargazers: bool = False) -> str:
     """Generate markdown report for repository"""
     repo = data.get('data', {}).get('repository')
     if not repo:
@@ -257,7 +264,8 @@ def generate_markdown_report(data: Dict[str, Any], owner: str, repo_name: str) -
     md_lines.append(f"| Is Fork | {repo.get('isFork', False)} |")
     md_lines.append(f"| Has Projects Enabled | {repo.get('hasProjectsEnabled', False)} |")
     md_lines.append(f"| Has Issues Enabled | {repo.get('hasIssuesEnabled', False)} |")
-    md_lines.append(f"| Total Stargazers | {repo.get('stargazerCount', 0)} |")
+    if print_stargazers:
+        md_lines.append(f"| Total Stargazers | {repo.get('stargazerCount', 0)} |")
     
     # Add zip download link
     default_branch = repo.get('defaultBranchRef', {})
@@ -265,19 +273,6 @@ def generate_markdown_report(data: Dict[str, Any], owner: str, repo_name: str) -
     zip_url = f"https://github.com/{owner}/{repo_name}/archive/refs/heads/{default_branch_name}.zip"
     md_lines.append(f"| Download ZIP | [{zip_url}]({zip_url}) |")
     md_lines.append("")
-    
-    # Assignable Users
-    assignable_users = repo.get('assignableUsers', {}).get('nodes', [])
-    if assignable_users:
-        md_lines.append("## Assignable Users")
-        md_lines.append("")
-        md_lines.append("| Login | Name | Email | Company | Location |")
-        md_lines.append("|-------|------|-------|---------|----------|")
-        for user in assignable_users:
-            login = user.get('login', 'N/A')
-            login_link = f"[{login}](https://github.com/{login})" if login != 'N/A' else 'N/A'
-            md_lines.append(f"| {login_link} | {user.get('name', 'N/A') or 'N/A'} | {user.get('email', 'N/A') or 'N/A'} | {user.get('company', 'N/A') or 'N/A'} | {user.get('location', 'N/A') or 'N/A'} |")
-        md_lines.append("")
     
     # Commit Statistics
     default_branch = repo.get('defaultBranchRef', {})
@@ -385,10 +380,10 @@ def generate_markdown_report(data: Dict[str, Any], owner: str, repo_name: str) -
     return "\n".join(md_lines)
 
 
-def print_repo_info(data: Dict[str, Any], owner: str, repo_name: str, client: Optional["GitHubGraphQLClient"] = None) -> None:
+def print_repo_info(data: Dict[str, Any], owner: str, repo_name: str, client: Optional["GitHubGraphQLClient"] = None, print_committers: bool = False, print_stargazers: bool = False) -> None:
     """Print formatted repository information"""
     print(f"[+] Repository: {repo_name}")
-    print(f"Owner: {owner}\n")
+    print(f"  Owner: {owner}\n")
     
     repo = data.get('data', {}).get('repository')
     if not repo:
@@ -400,50 +395,37 @@ def print_repo_info(data: Dict[str, Any], owner: str, repo_name: str, client: Op
             print("Error: Repository not found or not accessible", file=sys.stderr)
         return
     
-    print(f"Name (with Owner): {repo.get('nameWithOwner')}")
-    print(f"ID: {repo.get('id')}")
-    print(f"Description: {repo.get('description', 'N/A')}")
-    print(f"URL: {repo.get('url')}")
-    print(f"Homepage: {repo.get('homepageUrl', 'N/A')}")
-    print(f"Mirror URL: {repo.get('mirrorUrl', 'N/A')}")
-    print(f"Projects Count: {repo.get('projectsV2', {}).get('totalCount', 0)}")
-    print(f"Disk Usage: {repo.get('diskUsage', 'N/A')}")
-    print(f"Has Wiki: {repo.get('hasWikiEnabled')}")
-    print(f"Is in Org: {repo.get('isInOrganization')}")
-    print(f"Is Empty: {repo.get('isEmpty')}")
-    print(f"Is Mirror: {repo.get('isMirror')}")
-    print(f"Is Fork: {repo.get('isFork')}")
-    print(f"Has Projects Enabled: {repo.get('hasProjectsEnabled')}")
-    print(f"Has Issues Enabled: {repo.get('hasIssuesEnabled')}")
-    print(f"\nTotal Stargazers: {repo.get('stargazerCount', 0)}\n")
+    print(f"  Name (with Owner): {repo.get('nameWithOwner')} | ID: {repo.get('id')}")
+    print(f"  Description: {repo.get('description', 'N/A')}")
+    print(f"  URL: {repo.get('url')}")
+    homepage = repo.get('homepageUrl', '')
+    mirror_url = repo.get('mirrorUrl')
+    print(f"  Homepage: {homepage if homepage else 'None'} | Mirror URL: {mirror_url if mirror_url else 'None'}")
+    print(f"  Projects Count: {repo.get('projectsV2', {}).get('totalCount', 0)} | Disk Usage: {repo.get('diskUsage', 'N/A')} | Has Wiki: {repo.get('hasWikiEnabled')} | Is in Org: {repo.get('isInOrganization')}")
+    print(f"  Is Empty: {repo.get('isEmpty')} | Is Mirror: {repo.get('isMirror')} | Is Fork: {repo.get('isFork')}")
+    print(f"  Has Projects Enabled: {repo.get('hasProjectsEnabled')} | Has Issues Enabled: {repo.get('hasIssuesEnabled')}")
     
-    stargazers = repo.get('stargazers', {}).get('nodes', [])
-    if stargazers:
-        print("Stargazers:")
-        for stargazer in stargazers:
-            print(f"  Login: {stargazer.get('login')}")
-            print(f"  Name: {stargazer.get('name', 'N/A')}")
-            print(f"  Email: {stargazer.get('email', 'N/A')}")
-            print(f"  URL: {stargazer.get('url')}")
-            print()
-    
-    assignable_users = repo.get('assignableUsers', {}).get('nodes', [])
-    print(f"\n[+] Assignable Users: {repo.get('assignableUsers', {}).get('totalCount', 0)}")
-    for user in assignable_users:
-        print(f"\n[*] Assignable User Login: {user.get('login')}")
-        print(f"  Name: {user.get('name', 'N/A')}")
-        print(f"  Email: {user.get('email', 'N/A')}")
-        print(f"  Company: {user.get('company', 'N/A')}")
-        print(f"  Location: {user.get('location', 'N/A')}")
+    if print_stargazers:
+        print(f"\n  Total Stargazers: {repo.get('stargazerCount', 0)}\n")
+        stargazers = repo.get('stargazers', {}).get('nodes', [])
+        if stargazers:
+            print("  Stargazers:")
+            for stargazer in stargazers:
+                name = stargazer.get('name', 'None')
+                email = stargazer.get('email', '')
+                print(f"    Login: {stargazer.get('login')} Name: {name}")
+                print(f"    Email: {email if email else ''} URL: {stargazer.get('url')}")
+                print()
     
     prs = repo.get('pullRequests', {})
-    print(f"\n[*] Pull Requests: {prs.get('totalCount', 0)}\n")
+    print(f"\n  [*] Pull Requests: {prs.get('totalCount', 0)}\n")
     for pr in prs.get('nodes', []):
-        print(f"[+] PR #{pr.get('number')}")
-        print(f"  Permalink: {pr.get('permalink')}")
-        print(f"  Author: {pr.get('author', {}).get('login', 'N/A')}")
-        print(f"  Body: {pr.get('bodyText', 'N/A')[:200]}...")
-        print("  ---\n")
+        print(f"  [+] PR #{pr.get('number')}")
+        print(f"    Permalink: {pr.get('permalink')}")
+        print(f"    Author: {pr.get('author', {}).get('login', 'N/A')}")
+        print(f"    Body: {pr.get('bodyText', 'N/A')[:200]}...")
+        print("    ---")
+        print()
     
     # Commit Statistics
     default_branch = repo.get('defaultBranchRef', {})
@@ -451,16 +433,65 @@ def print_repo_info(data: Dict[str, Any], owner: str, repo_name: str, client: Op
     commit_history = default_branch.get('target', {}).get('history', {})
     total_commits = commit_history.get('totalCount', 0)
     
-    print(f"\n[+] Commit Statistics")
-    print(f"Total Commits: {total_commits}")
+    print(f"\n  [+] Commit Statistics")
+    print(f"  Total Commits: {total_commits}")
     
-    # Get committers from history
+    # Get committers from history - paginate through all commits
     commit_object = repo.get('object')
     commit_nodes = []
     if commit_object:
         commit_history = commit_object.get('history', {})
         if commit_history:
             commit_nodes = commit_history.get('nodes', [])
+            page_info = commit_history.get('pageInfo', {})
+            
+            # Paginate through all commits if there are more pages
+            if client and page_info.get('hasNextPage'):
+                cursor = page_info.get('endCursor')
+                while cursor:
+                    # Fetch next page of commits
+                    pagination_query = f"""
+                    query {{
+                      repository(owner: "{owner}", name: "{repo_name}") {{
+                        object(expression: "HEAD") {{
+                          ... on Commit {{
+                            history(first: 100, after: "{cursor}") {{
+                              pageInfo {{
+                                endCursor
+                                hasNextPage
+                              }}
+                              nodes {{
+                                author {{
+                                  name
+                                  email
+                                  user {{
+                                    login
+                                  }}
+                                }}
+                              }}
+                            }}
+                          }}
+                        }}
+                      }}
+                    }}
+                    """
+                    try:
+                        pagination_data = client.query(pagination_query)
+                        pagination_repo = pagination_data.get('data', {}).get('repository', {})
+                        pagination_object = pagination_repo.get('object', {})
+                        if pagination_object:
+                            pagination_history = pagination_object.get('history', {})
+                            if pagination_history:
+                                commit_nodes.extend(pagination_history.get('nodes', []))
+                                page_info = pagination_history.get('pageInfo', {})
+                                cursor = page_info.get('endCursor') if page_info.get('hasNextPage') else None
+                            else:
+                                cursor = None
+                        else:
+                            cursor = None
+                    except Exception as e:
+                        print(f"  [Warning] Error fetching additional commits: {str(e)}", file=sys.stderr)
+                        cursor = None
     
     committer_stats = {}
     
@@ -473,28 +504,60 @@ def print_repo_info(data: Dict[str, Any], owner: str, repo_name: str, client: Op
         # Use login if available, otherwise use name+email
         key = user_login if user_login else f"{author_name} <{author_email}>"
         
-        # Store committer info: (count, email)
+        # Store committer info: (count, email, login)
         if key not in committer_stats:
-            committer_stats[key] = {'count': 0, 'email': author_email}
+            committer_stats[key] = {'count': 0, 'email': author_email, 'login': user_login}
         committer_stats[key]['count'] += 1
     
     # Sort committers by commit count (descending)
     sorted_committers = sorted(committer_stats.items(), key=lambda x: x[1]['count'], reverse=True)
     
-    print(f"Total Committers (from last 100 commits): {len(sorted_committers)}")
+    print(f"  Total Committers (from total commits): {len(sorted_committers)}")
     if sorted_committers:
-        print("\nCommitters (ranked by commit count):")
+        print("\n  Committers (ranked by commit count):")
         for rank, (committer, info) in enumerate(sorted_committers, 1):
-            email_str = f" <{info['email']}>" if info['email'] else ""
-            print(f"  {rank}. {committer}{email_str}: {info['count']} commits")
+            email_str = f" <{info['email']}>" if info.get('email') else ""
+            print(f"    {rank}. {committer}{email_str}: {info.get('count', 0)} commits")
+    
+    # If --print-committers flag is set, loop through each committer and print user details
+    if print_committers and client and sorted_committers:
+        print("\nDetailed Committer Information")
+        print("="*80 + "\n")
+        
+        # Import here to avoid circular imports
+        from gitsome.handlers.user_handler import get_user_query, print_user_info
+        
+        for rank, (committer, info) in enumerate(sorted_committers, 1):
+            user_login = info.get('login')
+            
+            if user_login:
+                # This committer has a GitHub login, query user details
+                print(f"Committer #{rank}: {user_login}")
+                print("="*80 + "\n")
+                
+                try:
+                    user_query = get_user_query(user_login)
+                    user_data = client.query(user_query)
+                    print_user_info(user_data, user_login, client, print_gists=False)
+                except Exception as e:
+                    print(f"Error querying user {user_login}: {str(e)}", file=sys.stderr)
+                    print()
+            else:
+                # This is a "name <email>" format, no login available
+                print(f"Committer #{rank}: {committer}")
+                print("="*80)
+                print(f"Note: No GitHub user account found for this committer (email-based commit)")
+                print()
+        
+        print()
     
     # Branch Information
     refs = repo.get('refs', {})
     total_branches = refs.get('totalCount', 0)
     branch_nodes = refs.get('nodes', [])
     
-    print(f"\n[+] Branch Information")
-    print(f"Total Branches: {total_branches}")
+    print(f"\n  [+] Branch Information")
+    print(f"  Total Branches: {total_branches}")
     
     if branch_nodes and repo.get('isFork'):
         ahead_branches = []
@@ -519,9 +582,9 @@ def print_repo_info(data: Dict[str, Any], owner: str, repo_name: str, client: Op
         if ahead_branches:
             # Sort by ahead_by descending
             ahead_branches.sort(key=lambda x: x[1], reverse=True)
-            print(f"\n[*] Fork Analysis - Branches ahead of \"{default_branch_name}\":")
-            print(f"Branches AHEAD of {default_branch_name} (ranked by commits ahead):")
+            print(f"\n  [*] Fork Analysis - Branches ahead of \"{default_branch_name}\":")
+            print(f"  Branches AHEAD of {default_branch_name} (ranked by commits ahead):")
             for rank, (branch_name, ahead, behind) in enumerate(ahead_branches, 1):
                 behind_str = f" ({behind} commits behind)" if behind > 0 else ""
-                print(f"  {rank}. {branch_name}: {ahead} commits ahead{behind_str}")
+                print(f"    {rank}. {branch_name}: {ahead} commits ahead{behind_str}")
 

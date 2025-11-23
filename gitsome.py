@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 gitsome - GitHub Info Enumerator
 Unified Python script for querying GitHub via GraphQL API
@@ -9,6 +10,12 @@ import os
 import sys
 import argparse
 from datetime import datetime
+
+# Fix encoding for Windows console output
+if sys.platform == 'win32':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 try:
     import requests
@@ -62,6 +69,12 @@ Examples:
                            help='Organization name (default: thesavant42)')
     org_parser.add_argument('--no-save', action='store_true',
                            help='Do not save JSON output to file')
+    org_parser.add_argument('--print-repos', action='store_true',
+                           help='Print detailed information for each repository (equivalent to running repo command for each)')
+    org_parser.add_argument('--print-committers', action='store_true',
+                           help='Print detailed information for each committer (equivalent to running user command for each). Works with --print-repos.')
+    org_parser.add_argument('--stargazers', action='store_true',
+                           help='Include stargazer information in output')
     
     # Repository command
     repo_parser = subparsers.add_parser('repo', help='Query repository details')
@@ -71,6 +84,10 @@ Examples:
                             help='Repository name (default: gitsome)')
     repo_parser.add_argument('--no-save', action='store_true',
                             help='Do not save JSON output to file')
+    repo_parser.add_argument('--print-committers', action='store_true',
+                            help='Print detailed information for each committer (equivalent to running user command for each)')
+    repo_parser.add_argument('--stargazers', action='store_true',
+                            help='Include stargazer information in output')
     
     # User command
     user_parser = subparsers.add_parser('user', help='Query user details')
@@ -100,8 +117,7 @@ Examples:
     elif args.command == 'repo':
         print("Repository Enumeration Module\n")
     elif args.command == 'user':
-        print(f"gitSome - gitHub Info Enumerator, by savant42 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        print("User Enumeration Module")
+        pass  # No header needed for user command
     
     try:
         if args.command == 'org':
@@ -116,8 +132,59 @@ Examples:
             
             print_org_info(data, args.org_name)
             
+            # If --print-repos flag is set, loop through each repo and print detailed info
+            if args.print_repos:
+                owner = data.get('data', {}).get('repositoryOwner')
+                if owner:
+                    org_data = owner.get('repositories', {})
+                    nodes = org_data.get('nodes', [])
+                    
+                    if nodes:
+                        for repo in nodes:
+                            repo_name = repo.get('name')
+                            org_login = repo.get('organization', {}).get('login', args.org_name)
+                            
+                            if repo_name:
+                                print(f"\nProcessing repository: {org_login}/{repo_name}")
+                                print("="*80 + "\n")
+                                
+                                # Query and print repo details (equivalent to running repo command)
+                                repo_query = get_repo_query(org_login, repo_name, include_stargazers=args.stargazers)
+                                repo_data = client.query(repo_query)
+                                
+                                # Get default branch and all branch names for comparison query
+                                repo_data_obj = repo_data.get('data', {}).get('repository', {})
+                                default_branch = repo_data_obj.get('defaultBranchRef', {}).get('name', 'master')
+                                branch_nodes = repo_data_obj.get('refs', {}).get('nodes', [])
+                                
+                                # Build a single query with aliases for all branch comparisons
+                                if branch_nodes and repo_data_obj.get('isFork'):
+                                    branch_names = [b.get('name') for b in branch_nodes if b.get('name') != default_branch]
+                                    if branch_names:
+                                        try:
+                                            comparison_query = build_branch_comparison_query(org_login, repo_name, default_branch, branch_names)
+                                            comparison_data = client.query(comparison_query)
+                                            # Merge comparison data into main data
+                                            comparisons = comparison_data.get('data', {}).get('repository', {})
+                                            for i, branch_name in enumerate(branch_names[:50]):
+                                                alias = f"ref_{i}".replace('-', '_').replace('.', '_')
+                                                if alias in comparisons:
+                                                    ref_data = comparisons[alias]
+                                                    if ref_data and 'compare' in ref_data:
+                                                        for branch in branch_nodes:
+                                                            if branch.get('name') == branch_name:
+                                                                branch['compare'] = ref_data['compare']
+                                                                break
+                                        except Exception as e:
+                                            print(f"  [DEBUG] Error fetching branch comparisons: {str(e)}", file=sys.stderr)
+                                
+                                # Print repo info (with --print-committers and --stargazers if flags are set)
+                                print_repo_info(repo_data, org_login, repo_name, client, print_committers=args.print_committers, print_stargazers=args.stargazers)
+                                
+                                print()
+            
         elif args.command == 'repo':
-            query = get_repo_query(args.owner, args.repo_name)
+            query = get_repo_query(args.owner, args.repo_name, include_stargazers=args.stargazers)
             data = client.query(query)
             
             # Get default branch and all branch names for comparison query
@@ -151,10 +218,10 @@ Examples:
             if not args.no_save:
                 save_json(data, f"{args.owner}-{args.repo_name}-repo.json")
                 # Generate markdown report
-                markdown_content = generate_markdown_report(data, args.owner, args.repo_name)
+                markdown_content = generate_markdown_report(data, args.owner, args.repo_name, client, print_stargazers=args.stargazers)
                 save_markdown_report(markdown_content, f"{args.owner}-{args.repo_name}-repo.md")
             
-            print_repo_info(data, args.owner, args.repo_name, client)
+            print_repo_info(data, args.owner, args.repo_name, client, print_committers=args.print_committers, print_stargazers=args.stargazers)
             
         elif args.command == 'user':
             query = get_user_query(args.username)

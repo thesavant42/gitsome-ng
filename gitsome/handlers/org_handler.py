@@ -25,6 +25,18 @@ def get_org_query(org_name: str) -> str:
                 login
               }}
               repo_url: url
+              defaultBranchRef {{
+                target {{
+                  ... on Commit {{
+                    history {{
+                      totalCount
+                    }}
+                  }}
+                }}
+              }}
+              refs(refPrefix: "refs/heads/", first: 1) {{
+                totalCount
+              }}
             }}
           }}
         }}
@@ -82,11 +94,29 @@ def print_org_info(data: Dict[str, Any], org_name: str) -> None:
     
     print(f"Total Repositories: {total_count}\n")
     for repo in nodes:
-        print(f"Repository: {repo.get('name')}")
-        print(f"  ID: {repo.get('id')}")
-        print(f"  Stars: {repo.get('stars', 0)}")
-        print(f"  Forks: {repo.get('forks', 0)}")
-        print(f"  Created: {repo.get('created_at', 'N/A')}")
-        print(f"  URL: {repo.get('repo_url', 'N/A')}")
+        repo_name = repo.get('name')
+        repo_id = repo.get('id')
+        stars = repo.get('stars', 0)
+        forks = repo.get('forks', 0)
+        
+        # Get commit count
+        default_branch = repo.get('defaultBranchRef', {})
+        commit_count = 0
+        if default_branch:
+            target = default_branch.get('target', {})
+            if target:
+                history = target.get('history', {})
+                commit_count = history.get('totalCount', 0)
+        
+        # Get branch count
+        refs = repo.get('refs', {})
+        branch_count = refs.get('totalCount', 0)
+        
+        created = repo.get('created_at', 'N/A')
+        repo_url = repo.get('repo_url', 'N/A')
+        
+        print(f"Repository: {repo_name} ID: {repo_id}")
+        print(f"  Stars: {stars} Forks: {forks} Commits: {commit_count} Branches: {branch_count}")
+        print(f"  Created: {created} URL: {repo_url}")
         print()
 
