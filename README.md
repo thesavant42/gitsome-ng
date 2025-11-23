@@ -62,9 +62,14 @@ python gitsome.py org thesavant42
 ```
 
 **Output:**
-- Lists all repositories with ID, name, stars, forks, creation date, and URL
+- Lists all repositories with ID, name, stars, forks, commits, branches, creation date, and URL
 - Saves JSON to `output/{org_name}-org.json`
 - Saves Markdown report to `output/{org_name}-org.md`
+
+**Options:**
+- `--print-repos`: Print detailed information for each repository (equivalent to running `repo` command for each repository)
+- `--print-committers`: Print detailed information for each committer (equivalent to running `user` command for each). Works with `--print-repos` to show committers for each repository.
+- `--stargazers`: Include stargazer information in output (only shown when this flag is used)
 
 ### Query Repository Details
 
@@ -77,13 +82,14 @@ python gitsome.py repo facebook graphql
 **Output:**
 - Repository metadata (description, URLs, settings)
 - Pull requests (last 100)
-- Issues (last 25)
-- Assignable users with their gists and repositories
-- Stargazers (last 10)
-- Releases (last 100)
-- Branches and commit history
+- Commit statistics with committer information (from all commits)
+- Branch information
 - Saves JSON to `output/{owner}-{repo_name}-repo.json`
 - Saves Markdown report to `output/{owner}-{repo_name}-repo.md`
+
+**Options:**
+- `--print-committers`: Print detailed information for each committer (equivalent to running `user` command for each committer)
+- `--stargazers`: Include stargazer information in output (only shown when this flag is used)
 
 ### Query User Profile
 
@@ -95,17 +101,33 @@ python gitsome.py user octocat
 
 **Output:**
 - User profile information
-- All repositories with details
-- Gists and gist comments
-- Followers and following counts
-- Clone URLs for all repositories
+- All repositories with details (compact format)
+- Gists with file contents (for plain text files)
+- Followers and following lists
 - Saves JSON to `output/{username}-user.json`
 - Saves Markdown report to `output/{username}-user.md`
 
-### Options
+**Options:**
+- `--print-gists`: Print detailed gist information (note: basic gist info is always displayed)
+
+### Global Options
 
 - `--no-save`: Skip saving JSON and Markdown output files
 - `-h, --help`: Show help message
+
+### Command-Specific Options
+
+**Organization (`org`) command:**
+- `--print-repos`: Print detailed information for each repository
+- `--print-committers`: Print detailed information for each committer (works with `--print-repos`)
+- `--stargazers`: Include stargazer information in output
+
+**Repository (`repo`) command:**
+- `--print-committers`: Print detailed information for each committer
+- `--stargazers`: Include stargazer information in output
+
+**User (`user`) command:**
+- `--print-gists`: Print detailed gist information (basic gist info is always displayed)
 
 ## Examples
 
@@ -113,8 +135,20 @@ python gitsome.py user octocat
 # Query an organization
 python gitsome.py org microsoft
 
+# Query an organization and print detailed info for each repository
+python gitsome.py org microsoft --print-repos
+
+# Query an organization, print repos, and show committer details
+python gitsome.py org microsoft --print-repos --print-committers
+
 # Query a specific repository
 python gitsome.py repo microsoft vscode
+
+# Query a repository and show committer details
+python gitsome.py repo microsoft vscode --print-committers
+
+# Query a repository with stargazer information
+python gitsome.py repo microsoft vscode --stargazers
 
 # Query a user profile
 python gitsome.py user github
