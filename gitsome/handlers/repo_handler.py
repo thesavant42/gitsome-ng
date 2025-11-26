@@ -538,7 +538,7 @@ def print_repo_info(data: Dict[str, Any], owner: str, repo_name: str, client: Op
                 try:
                     user_query = get_user_query(user_login)
                     user_data = client.query(user_query)
-                    print_user_info(user_data, user_login, client, print_gists=False)
+                    print_user_info(user_data, user_login)
                 except Exception as e:
                     print(f"Error querying user {user_login}: {str(e)}", file=sys.stderr)
                     print()

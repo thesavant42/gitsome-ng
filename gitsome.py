@@ -233,7 +233,7 @@ Examples:
                 markdown_content = generate_markdown_report_user(data, args.username)
                 save_markdown_report(markdown_content, f"{args.username}-user.md")
             
-            print_user_info(data, args.username, client, print_gists=args.print_gists)
+            print_user_info(data, args.username)
             
     except requests.exceptions.HTTPError as e:
         print(f"Error: HTTP {e.response.status_code}", file=sys.stderr)

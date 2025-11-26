@@ -1,6 +1,5 @@
 """User handler - query, format, and report generation for users"""
 
-from datetime import datetime
 from typing import Dict, Any
 
 
@@ -146,17 +145,15 @@ def get_user_query(username: str) -> str:
     """
 
 
-def generate_markdown_report_user(data: Dict[str, Any], username: str, client=None) -> str:
+def generate_markdown_report_user(data: Dict[str, Any], username: str) -> str:
     """Generate markdown report for user"""
     user = data.get('data', {}).get('user')
     if not user:
         return ""
-    
     md_lines = []
     md_lines.append(f"# User: {username}")
     md_lines.append(f"**GitHub Profile:** [{username}](https://github.com/{username})")
     md_lines.append("")
-    
     # User Information Table
     md_lines.append("## User Information")
     md_lines.append("")
@@ -169,7 +166,6 @@ def generate_markdown_report_user(data: Dict[str, Any], username: str, client=No
     following = user.get('following', {})
     following_count = following.get('totalCount', 0)
     md_lines.append(f"| Following | {following_count} |")
-    
     # Following users list
     following_nodes = following.get('nodes', [])
     if following_nodes:
@@ -183,14 +179,19 @@ def generate_markdown_report_user(data: Dict[str, Any], username: str, client=No
             login_link = f"[{login}](https://github.com/{login})" if login != 'N/A' else 'N/A'
             md_lines.append(f"| {login_link} | {follow_user.get('name', 'N/A') or 'N/A'} | {follow_user.get('email', 'N/A') or 'N/A'} | {follow_user.get('company', 'N/A') or 'N/A'} | {follow_user.get('location', 'N/A') or 'N/A'} |")
         md_lines.append("")
-    md_lines.append(f"| Followers | {user.get('followers', {}).get('totalCount', 0)} |")
-    md_lines.append(f"| Total Repositories | {user.get('repositories', {}).get('totalCount', 0)} |")
-    md_lines.append(f"| Total Gists | {user.get('gists', {}).get('totalCount', 0)} |")
-    md_lines.append(f"| Total Gist Comments | {user.get('gistComments', {}).get('totalCount', 0)} |")
+    # Fix: safely handle None values
+    followers_obj = user.get('followers') or {}
+    md_lines.append(f"| Followers | {followers_obj.get('totalCount', 0) if isinstance(followers_obj, dict) else 0} |")
+    repos_obj = user.get('repositories') or {}
+    md_lines.append(f"| Total Repositories | {repos_obj.get('totalCount', 0) if isinstance(repos_obj, dict) else 0} |")
+    gists_obj = user.get('gists') or {}
+    md_lines.append(f"| Total Gists | {gists_obj.get('totalCount', 0) if isinstance(gists_obj, dict) else 0} |")
+    gist_comments_obj = user.get('gistComments') or {}
+    md_lines.append(f"| Total Gist Comments | {gist_comments_obj.get('totalCount', 0) if isinstance(gist_comments_obj, dict) else 0} |")
     md_lines.append("")
     
     # Repositories
-    repos = user.get('repositories', {}).get('edges', [])
+    repos = repos_obj.get('edges', []) if isinstance(repos_obj, dict) else []
     if repos:
         md_lines.append("## Repositories")
         md_lines.append("")
@@ -199,7 +200,9 @@ def generate_markdown_report_user(data: Dict[str, Any], username: str, client=No
         for repo_edge in repos:
             repo = repo_edge.get('node', {})
             repo_name = repo.get('name', 'N/A')
-            repo_owner = repo.get('owner', {}).get('login', username)
+            # Fix: safely handle None owner
+            owner_obj = repo.get('owner') or {}
+            repo_owner = owner_obj.get('login', username) if isinstance(owner_obj, dict) else username
             repo_url = repo.get('url', '#')
             repo_link = f"[{repo_name}]({repo_url})"
             description = (repo.get('description', 'N/A') or 'N/A')[:50]  # Truncate long descriptions
@@ -217,7 +220,8 @@ def generate_markdown_report_user(data: Dict[str, Any], username: str, client=No
         md_lines.append("")
     
     # Gists
-    gists = user.get('gists', {}).get('edges', [])
+    gists_obj = user.get('gists') or {}
+    gists = gists_obj.get('edges', []) if isinstance(gists_obj, dict) else []
     if gists:
         md_lines.append("## Gists")
         md_lines.append("")
@@ -288,7 +292,9 @@ def generate_markdown_report_user(data: Dict[str, Any], username: str, client=No
                     file_name = file.get('name', 'N/A')
                     encoded_name = file.get('encodedName', 'N/A')
                     extension = file.get('extension', 'N/A') or 'N/A'
-                    language = file.get('language', {}).get('name', 'N/A') or 'N/A'
+                    # Fix: safely handle None language
+                    language_obj = file.get('language')
+                    language = (language_obj or {}).get('name', 'N/A') if language_obj else 'N/A'
                     size = file.get('size', 0) or 0
                     encoding = file.get('encoding', 'N/A') or 'N/A'
                     is_image = file.get('isImage', False)
@@ -348,7 +354,9 @@ def generate_markdown_report_user(data: Dict[str, Any], username: str, client=No
                         for fork in fork_nodes[:20]:  # Show first 20
                             fork_name = fork.get('name', 'N/A')
                             fork_url = fork.get('url', '#')
-                            fork_owner = fork.get('owner', {}).get('login', 'N/A')
+                            # Fix: safely handle None owner
+                            fork_owner_obj = fork.get('owner') or {}
+                            fork_owner = fork_owner_obj.get('login', 'N/A') if isinstance(fork_owner_obj, dict) else 'N/A'
                             md_lines.append(f"| {fork_name} | [{fork_owner}](https://github.com/{fork_owner}) | [{fork_url}]({fork_url}) |")
                 md_lines.append("")
             
@@ -356,14 +364,17 @@ def generate_markdown_report_user(data: Dict[str, Any], username: str, client=No
             md_lines.append("")
     
     # Gist Comments
-    gist_comments = user.get('gistComments', {}).get('nodes', [])
+    gist_comments_obj = user.get('gistComments') or {}
+    gist_comments = gist_comments_obj.get('nodes', []) if isinstance(gist_comments_obj, dict) else []
     if gist_comments:
         md_lines.append("## Gist Comments")
         md_lines.append("")
         md_lines.append("| Gist URL | Created | Updated | Preview |")
         md_lines.append("|----------|--------|---------|---------|")
         for comment in gist_comments:
-            gist_url = comment.get('gist', {}).get('url', '#')
+            # Fix: safely handle None gist
+            gist_obj = comment.get('gist')
+            gist_url = (gist_obj or {}).get('url', '#') if gist_obj else '#'
             body_preview = (comment.get('body', 'N/A') or 'N/A')[:100].replace('\n', ' ')
             md_lines.append(f"| [{gist_url}]({gist_url}) | {comment.get('createdAt', 'N/A')} | {comment.get('updatedAt', 'N/A')} | {body_preview}... |")
         md_lines.append("")
@@ -371,38 +382,40 @@ def generate_markdown_report_user(data: Dict[str, Any], username: str, client=No
     return "\n".join(md_lines)
 
 
-def print_user_info(data: Dict[str, Any], username: str, client=None, print_gists: bool = False) -> None:
-    """Print formatted user information"""
+def print_user_info(data: Dict[str, Any], username: str) -> None:
+    """Print formatted user information matching bash script format"""
     user = data.get('data', {}).get('user')
     if not user:
         print("Error: User not found or not accessible")
         return
     
+    # Basic user info - matching bash script lines 141-149
     print(f"\n[+] User Enumeration: {username}")
-    print(f"Login: {user.get('login')}")
-    print(f"Email: {user.get('email', 'N/A')}")
-    print(f"Location: {user.get('location', 'N/A')}")
-    print(f"Company: {user.get('company', 'N/A')}")
-    following = user.get('following', {})
+    print(f"Login: {user.get('login', 'N/A')}")
+    print(f"Email: {user.get('email', 'N/A') or 'N/A'}")
+    print(f"Location: {user.get('location', 'N/A') or 'N/A'}")
+    print(f"Company: {user.get('company', 'N/A') or 'N/A'}")
+    following = user.get('following', {}) or {}
     print(f"Following: {following.get('totalCount', 0)}")
-    following_nodes = following.get('nodes', [])
-    if following_nodes:
-        print("  Users being followed:")
-        for follow_user in following_nodes[:20]:  # Show first 20
-            print(f"    - {follow_user.get('login', 'N/A')} ({follow_user.get('url', 'N/A')})")
-    print(f"Followers: {user.get('followers', {}).get('totalCount', 0)}")
-    print(f"Total Repositories: {user.get('repositories', {}).get('totalCount', 0)}")
-    print(f"Total Gists: {user.get('gists', {}).get('totalCount', 0)}")
-    print(f"Total Gist Comments: {user.get('gistComments', {}).get('totalCount', 0)}")
+    followers = user.get('followers', {}) or {}
+    print(f"Followers: {followers.get('totalCount', 0)}")
+    repos_total = user.get('repositories', {}).get('totalCount', 0) if user.get('repositories') else 0
+    print(f"Total Repositories: {repos_total}")
+    gists_total = user.get('gists', {}).get('totalCount', 0) if user.get('gists') else 0
+    print(f"Total Gists: {gists_total}")
+    gist_comments_total = user.get('gistComments', {}).get('totalCount', 0) if user.get('gistComments') else 0
+    print(f"Total Gist Comments: {gist_comments_total}")
     
+    # Repositories - matching bash script lines 152-166
     repos = user.get('repositories', {}).get('edges', [])
-    print(f"\n[+] Repositories for {username}: {user.get('repositories', {}).get('totalCount', 0)}")
+    print(f"\n[+] Repositories for {username}: {repos_total} \n---")
     for repo_edge in repos:
         repo = repo_edge.get('node', {})
         repo_name = repo.get('name', 'N/A')
         description = repo.get('description') or 'None'
         disk_usage = repo.get('diskUsage', 'N/A')
         url = repo.get('url', 'N/A')
+        ssh_url = repo.get('sshUrl', 'N/A')
         homepage = repo.get('homepageUrl') or 'None'
         wiki = repo.get('hasWikiEnabled', False)
         stars = repo.get('stargazerCount', 0)
@@ -411,143 +424,82 @@ def print_user_info(data: Dict[str, Any], username: str, client=None, print_gist
         is_fork = repo.get('isFork', False)
         is_empty = repo.get('isEmpty', False)
         
-        # Format: Name | Description | Stats
-        stats_parts = []
-        if stars > 0:
-            stats_parts.append(f"⭐ {stars}")
-        if fork_count > 0:
-            stats_parts.append(f"🍴 {fork_count}")
-        if is_fork:
-            stats_parts.append("Fork")
-        if is_empty:
-            stats_parts.append("Empty")
-        stats_str = " | ".join(stats_parts) if stats_parts else "No stats"
-        
-        print(f"  {repo_name}")
-        print(f"    Description: {description}")
-        print(f"    URL: {url}")
-        if homepage != 'None':
-            print(f"    Homepage: {homepage}")
-        print(f"    Disk: {disk_usage} | Wiki: {wiki} | Org: {in_org} | {stats_str}")
+        print(f"Repository Name: {repo_name}")
+        print(f"Description: {description}")
+        print(f"Disk Usage: {disk_usage}")
+        print(f"HTTPS URL: {url}")
+        print(f"SSH URL: {ssh_url}")
+        print(f"Homepage: {homepage}")
+        print(f"GitWiki: {wiki}")
+        print(f"Stargazer Count: {stars}")
+        print(f"Is In Org: {in_org}")
+        print(f"Fork Count: {fork_count}")
+        print(f"Is Fork: {is_fork}")
+        print(f"Is Empty: {is_empty}")
+        print("---")
     
+    # Clone URL list - matching bash script lines 169-170
+    if repos:
+        print(f"\n[+] Repos Clone URL List (HTTPS):\n---")
+        for repo_edge in repos:
+            repo = repo_edge.get('node', {})
+            url = repo.get('url', '')
+            if url:
+                print(f"{url}.git")
+    
+    # Gists - matching bash script lines 173-181
     gists = user.get('gists', {}).get('edges', [])
-    gist_count = user.get('gists', {}).get('totalCount', 0)
-    print(f"\n[+] Gists from {username}: {gist_count}")
-    
-    if gists:
-        print("")
-        # Summary table
-        print(f"{'ID':<12} {'Name':<30} {'Public':<8} {'Fork':<6} {'Stars':<6} {'Created':<20} {'URL':<50}")
-        print("-" * 150)
-        for gist_edge in gists:
-            gist = gist_edge.get('node', {})
-            gist_id = gist.get('id', 'N/A')[:12]
-            gist_name = gist.get('name', 'N/A')[:28]
-            is_public = str(gist.get('isPublic', False))
-            is_fork = str(gist.get('isFork', False))
-            star_count = gist.get('stargazerCount', 0)
-            created = gist.get('createdAt', 'N/A')[:18]
-            gist_url = gist.get('url', 'N/A')[:48]
-            print(f"{gist_id:<12} {gist_name:<30} {is_public:<8} {is_fork:<6} {star_count:<6} {created:<20} {gist_url:<50}")
-        print("")
+    print(f"\n[+] Gists from {username}: {gists_total} \n")
+    for gist_edge in gists:
+        gist = gist_edge.get('node', {})
+        gist_name = gist.get('name', 'N/A')
+        gist_url = gist.get('url', 'N/A')
+        description = gist.get('description') or 'None'
         
-        # Detailed info for each gist
-        for gist_edge in gists:
-            gist = gist_edge.get('node', {})
-            print(f"\n[+] Gist: {gist.get('name', 'N/A')}")
-            print(f"  ID: {gist.get('id', 'N/A')}")
-            print(f"  Description: {gist.get('description', 'N/A')}")
-            print(f"  URL: {gist.get('url', 'N/A')}")
-            print(f"  Resource Path: {gist.get('resourcePath', 'N/A')}")
-            print(f"  Public: {gist.get('isPublic', False)}")
-            print(f"  Is Fork: {gist.get('isFork', False)}")
-            print(f"  Created: {gist.get('createdAt', 'N/A')}")
-            print(f"  Updated: {gist.get('updatedAt', 'N/A')}")
-            print(f"  Pushed: {gist.get('pushedAt', 'N/A') or 'N/A'}")
-            print(f"  Stargazer Count: {gist.get('stargazerCount', 0)}")
-            print(f"  Viewer Has Starred: {gist.get('viewerHasStarred', False)}")
-            
-            owner = gist.get('owner', {})
-            if owner:
-                print(f"  Owner: {owner.get('login', 'N/A')} ({owner.get('id', 'N/A')})")
-            
-            # Files
-            files = gist.get('files', [])
-            if files:
-                print(f"  Files ({len(files)}):")
-                print(f"    {'Name':<30} {'Extension':<12} {'Language':<15} {'Size':<10} {'Encoding':<10} {'Image':<8} {'Truncated':<10}")
-                print(f"    {'-'*30} {'-'*12} {'-'*15} {'-'*10} {'-'*10} {'-'*8} {'-'*10}")
-                for file in files:
-                    file_name = (file.get('name', 'N/A') or file.get('encodedName', 'N/A'))[:28]
-                    extension = (file.get('extension', 'N/A') or 'N/A')[:10]
-                    language = (file.get('language', {}).get('name', 'N/A') or 'N/A')[:13]
-                    size = str(file.get('size', 0) or 0)[:8]
-                    encoding = (file.get('encoding', 'N/A') or 'N/A')[:8]
-                    is_image = str(file.get('isImage', False))[:6]
-                    is_truncated = str(file.get('isTruncated', False))[:8]
-                    print(f"    {file_name:<30} {extension:<12} {language:<15} {size:<10} {encoding:<10} {is_image:<8} {is_truncated:<10}")
-                    
-                    # Display file content for plain text files
-                    file_text = file.get('text')
-                    if file_text and not file.get('isImage', False) and not file.get('isTruncated', False):
-                        print(f"    Content:")
-                        # Split into lines and indent each line
-                        content_lines = file_text.split('\n')
-                        for line in content_lines[:100]:  # Limit to first 100 lines to avoid huge output
-                            print(f"      {line}")
-                        if len(content_lines) > 100:
-                            print(f"      ... ({len(content_lines) - 100} more lines)")
-                        print()
-            
-            # Comments
-            comments = gist.get('comments', {})
-            if comments:
-                comment_count = comments.get('totalCount', 0)
-                print(f"  Comments: {comment_count}")
-                comment_nodes = comments.get('nodes', [])
-                if comment_nodes:
-                    for comment in comment_nodes[:5]:  # Show first 5
-                        author = comment.get('author', {})
-                        print(f"    - {author.get('login', 'N/A')}: {comment.get('bodyText', 'N/A')[:60]}... ({comment.get('createdAt', 'N/A')})")
-            
-            # Stargazers
-            stargazers = gist.get('stargazers', {})
-            if stargazers:
-                star_count = stargazers.get('totalCount', 0)
-                print(f"  Stargazers: {star_count}")
-                star_nodes = stargazers.get('nodes', [])
-                if star_nodes:
-                    star_logins = [s.get('login', '') for s in star_nodes[:10]]
-                    print(f"    Top: {', '.join(star_logins)}")
-            
-            # Forks
-            forks = gist.get('forks', {})
-            if forks:
-                fork_count = forks.get('totalCount', 0)
-                print(f"  Forks: {fork_count}")
-                fork_nodes = forks.get('nodes', [])
-                if fork_nodes:
-                    for fork in fork_nodes[:5]:  # Show first 5
-                        fork_owner = fork.get('owner', {}).get('login', 'N/A')
-                        print(f"    - {fork_owner}/{fork.get('name', 'N/A')}: {fork.get('url', 'N/A')}")
-            
-            # Zip download
-            gist_url = gist.get('url', '')
-            if gist_url and '/gist.github.com/' in gist_url:
-                # Append /archive/main.zip to the gist URL
-                zip_url = f"{gist_url}/archive/main.zip"
-                print(f"  Download ZIP: {zip_url}")
-            
+        # Get file information - bash script shows first file's info
+        files = gist.get('files', [])
+        if files:
+            for file in files:
+                encoded_name = file.get('encodedName', 'N/A')
+                language = file.get('language', {})
+                language_name = language.get('name', 'N/A') if language else 'N/A'
+                size = file.get('size', 'N/A')
+                
+                print(f"Gist ID: {gist_name}")
+                print(f"URL: {gist_url}")
+                print(f"Filename: {encoded_name}")
+                print(f"Language: {language_name}")
+                print(f"Description: {description}")
+                print(f"Size: {size}")
+                print("---")
+                break  # Only show first file per gist to match bash script format
+        else:
+            # No files, still show gist info
+            print(f"Gist ID: {gist_name}")
+            print(f"URL: {gist_url}")
+            print(f"Filename: N/A")
+            print(f"Language: N/A")
+            print(f"Description: {description}")
+            print(f"Size: N/A")
             print("---")
     
+    # Gist Comments - matching bash script lines 184-190
     gist_comments = user.get('gistComments', {}).get('nodes', [])
-    print(f"\n[+] Gist Comments from {username}: {user.get('gistComments', {}).get('totalCount', 0)} \n")
-    for comment in gist_comments:
-        print(f"Gist Comment: {comment.get('gist', {}).get('url')}")
-        print(f"Created: {comment.get('createdAt')}")
-        print(f"Updated: {comment.get('updatedAt')}")
-        print(f"Body: {comment.get('body', 'N/A')[:200]}...")
-        print("---")
+    if gist_comments:
+        print(f"\n[+] Gist Comments from {username}: {gist_comments_total} \n")
+        for comment in gist_comments:
+            # Fix: safely handle None gist
+            gist_obj = comment.get('gist')
+            gist_url = (gist_obj or {}).get('url', 'N/A') if gist_obj else 'N/A'
+            created = comment.get('createdAt', 'N/A')
+            updated = comment.get('updatedAt', 'N/A')
+            body = comment.get('body', 'N/A') or 'N/A'
+            
+            print(f"Gist Comment: {gist_url}")
+            print(f"Created: {created}")
+            print(f"Updated: {updated}")
+            print(f"Body: {body}")
+            print("---")
     
     print(f"\n[+] END {username}\n")
 

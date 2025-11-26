@@ -1,3 +1,6 @@
 /output
 /.cursor
 /.mypy_cache
+/gitsome/__pycache__
+/gitsome/handlers/__pycache__
+*.pyc
