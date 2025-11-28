@@ -1,4 +1,4 @@
-module charming-commits
+module github.com/thesavant42/gitsome-ng
 
 go 1.25.4
 

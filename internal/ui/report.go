@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"charming-commits/internal/models"
+	"github.com/thesavant42/gitsome-ng/internal/models"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/table"

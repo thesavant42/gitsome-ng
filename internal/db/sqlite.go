@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"charming-commits/internal/models"
+	"github.com/thesavant42/gitsome-ng/internal/models"
 
 	_ "modernc.org/sqlite"
 )

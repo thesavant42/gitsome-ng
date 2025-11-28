@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"charming-commits/internal/db"
+	"github.com/thesavant42/gitsome-ng/internal/db"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"

@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"charming-commits/internal/models"
+	"github.com/thesavant42/gitsome-ng/internal/models"
 )
 
 const (

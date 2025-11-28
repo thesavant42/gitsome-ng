@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"charming-commits/internal/api"
-	"charming-commits/internal/db"
-	"charming-commits/internal/models"
+	"github.com/thesavant42/gitsome-ng/internal/api"
+	"github.com/thesavant42/gitsome-ng/internal/db"
+	"github.com/thesavant42/gitsome-ng/internal/models"
 
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"charming-commits/internal/models"
+	"github.com/thesavant42/gitsome-ng/internal/models"
 )
 
 // ExportTabToMarkdown exports the current stats to a markdown file

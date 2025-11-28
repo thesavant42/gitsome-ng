@@ -6,10 +6,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"charming-commits/internal/api"
-	"charming-commits/internal/db"
-	"charming-commits/internal/models"
-	"charming-commits/internal/ui"
+	"github.com/thesavant42/gitsome-ng/internal/api"
+	"github.com/thesavant42/gitsome-ng/internal/db"
+	"github.com/thesavant42/gitsome-ng/internal/models"
+	"github.com/thesavant42/gitsome-ng/internal/ui"
 
 	"github.com/joho/godotenv"
 )
@@ -311,3 +311,4 @@ func loadFromFile(filePath string) ([]models.Commit, string, string, error) {
 
 	return commits, owner, repo, nil
 }
+
