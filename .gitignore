@@ -6,3 +6,8 @@ __pycache__/
 *.pyo
 *.pyd
 .Python
+.env
+*.db
+*.exe
+*.md
+!README.md
