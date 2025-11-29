@@ -34,10 +34,33 @@ type fetchCompleteMsg struct {
 	err     error
 }
 
+// User data fetch messages
+type userQueryStartMsg struct {
+	logins []string
+}
+
+type userQueryProgressMsg struct {
+	login    string
+	progress int
+	total    int
+}
+
+type userQueryCompleteMsg struct {
+	login string
+	data  *models.UserData
+	err   error
+}
+
+type userQueryDoneMsg struct {
+	total     int
+	succeeded int
+	failed    int
+}
+
 // Color palette for link groups
 var linkColors = []lipgloss.Color{
 	lipgloss.Color("86"),  // cyan
-	lipgloss.Color("226"),  // bright yellow
+	lipgloss.Color("226"), // bright yellow
 	lipgloss.Color("213"), // magenta
 	lipgloss.Color("208"), // orange
 	lipgloss.Color("141"), // purple
@@ -50,6 +73,7 @@ var linkColors = []lipgloss.Color{
 var menuOptions = []string{
 	"Configure Highlight Domains",
 	"Add Repository",
+	"Query Tagged Users",
 	"Switch Project",
 	"Export Tab to Markdown",
 	"Export Database Backup",
@@ -94,10 +118,10 @@ type TUIModel struct {
 	addRepoInputActive bool
 
 	// API fetch state
-	token            string // GitHub API token
-	fetchPromptRepo  *models.RepoInfo // repo pending fetch confirmation
-	fetchingRepo     *models.RepoInfo // repo currently being fetched
-	fetchProgress    string           // progress message during fetch
+	token           string           // GitHub API token
+	fetchPromptRepo *models.RepoInfo // repo pending fetch confirmation
+	fetchingRepo    *models.RepoInfo // repo currently being fetched
+	fetchProgress   string           // progress message during fetch
 
 	// Project switch state
 	switchProject bool // true when user wants to switch to a different project
@@ -105,6 +129,25 @@ type TUIModel struct {
 	// Export state
 	dbPath        string // path to current database for backup export
 	exportMessage string // message to show after export (success or error)
+
+	// User query state
+	queryingUsers      bool     // true when querying tagged users
+	queryProgress      string   // progress message during query
+	queryTotal         int      // total users to query
+	queryCompleted     int      // users completed
+	queryFailed        int      // users that failed
+	queryLoginsToFetch []string // logins remaining to fetch
+
+	// User detail view state
+	userDetailVisible bool                    // showing user detail view
+	selectedUserLogin string                  // which user we're viewing
+	userRepos         []models.UserRepository // repos for selected user
+	userGists         []models.UserGist       // gists for selected user
+	userDetailTab     int                     // 0 = repos, 1 = gists
+	userDetailCursor  int                     // cursor position in detail view
+
+	// Processed users cache - logins with fetched data show [!] instead of [x]
+	processedLogins map[string]bool
 }
 
 // NewTUIModel creates a new interactive table model
@@ -130,11 +173,26 @@ func NewTUIModel(
 		{Title: "%", Width: 7},
 	}
 
+	// Build processed logins cache - check which users have fetched data
+	processedLogins := make(map[string]bool)
+	if database != nil {
+		for _, s := range stats {
+			if s.GitHubLogin != "" {
+				if hasData, _ := database.UserHasData(s.GitHubLogin); hasData {
+					processedLogins[s.GitHubLogin] = true
+				}
+			}
+		}
+	}
+
 	// Build rows
 	rows := make([]table.Row, len(stats))
 	for i, s := range stats {
 		tagMark := "[ ]"
-		if tags[s.Email] {
+		// Check if user has been processed (data fetched) - shows [!]
+		if s.GitHubLogin != "" && processedLogins[s.GitHubLogin] {
+			tagMark = "[!]"
+		} else if tags[s.Email] {
 			tagMark = "[x]"
 		}
 
@@ -170,7 +228,7 @@ func NewTUIModel(
 		BorderBottom(true).
 		Bold(true).
 		Foreground(lipgloss.Color("15")) // bright white text
-	
+
 	// Note: Cell foreground is set in renderTableWithLinks to avoid conflicts with link colors
 
 	s.Selected = s.Selected.
@@ -199,6 +257,7 @@ func NewTUIModel(
 		tableType:        tableType,
 		totalCommits:     totalCommits,
 		cached:           cached,
+		processedLogins:  processedLogins,
 	}
 }
 
@@ -221,8 +280,12 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.fetchingRepo = nil
 		m.fetchProgress = ""
 		if msg.err != nil {
-			// Could show error, for now just clear
+			// Show error message to user
+			m.exportMessage = fmt.Sprintf("Fetch failed: %v", msg.err)
 			return m, nil
+		}
+		if len(msg.commits) == 0 {
+			m.exportMessage = fmt.Sprintf("No commits found for %s/%s", msg.owner, msg.name)
 		}
 		// Store commits in database
 		if m.database != nil && len(msg.commits) > 0 {
@@ -240,6 +303,37 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 		}
+		return m, nil
+
+	case userQueryProgressMsg:
+		m.queryProgress = fmt.Sprintf("Querying %s... (%d/%d)", msg.login, msg.progress, msg.total)
+		return m, nil
+
+	case userQueryCompleteMsg:
+		m.queryCompleted++
+		if msg.err != nil {
+			m.queryFailed++
+		} else if msg.data != nil && m.database != nil {
+			// Save user data to database
+			m.database.SaveUserRepositories(msg.data.Repositories)
+			m.database.SaveUserGists(msg.data.Gists)
+			// Mark this login as processed so it shows [!] instead of [x]
+			if m.processedLogins == nil {
+				m.processedLogins = make(map[string]bool)
+			}
+			m.processedLogins[msg.login] = true
+		}
+		// Fetch next user if any
+		if len(m.queryLoginsToFetch) > 0 {
+			login := m.queryLoginsToFetch[0]
+			m.queryLoginsToFetch = m.queryLoginsToFetch[1:]
+			return m, m.startUserQuery(login, m.queryCompleted+1, m.queryTotal)
+		}
+		// All done - update rows to reflect new [!] indicators
+		m.queryingUsers = false
+		m.queryProgress = ""
+		m.updateRows()
+		m.exportMessage = fmt.Sprintf("Queried %d users (%d succeeded, %d failed)", m.queryTotal, m.queryTotal-m.queryFailed, m.queryFailed)
 		return m, nil
 
 	case tea.KeyMsg:
@@ -269,6 +363,11 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleAddRepoInput(msg)
 		}
 
+		// Handle user detail view
+		if m.userDetailVisible {
+			return m.handleUserDetailView(msg)
+		}
+
 		// Handle domain config input mode
 		if m.domainConfigVisible && m.domainInputActive {
 			return m.handleDomainInput(msg)
@@ -285,7 +384,7 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Block input while fetching
-		if m.fetchingRepo != nil {
+		if m.fetchingRepo != nil || m.queryingUsers {
 			return m, nil
 		}
 
@@ -424,6 +523,21 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
+
+		case "enter":
+			// View user detail if user has a GitHub login and data exists
+			cursor := m.table.Cursor()
+			if cursor >= 0 && cursor < len(m.stats) {
+				login := m.stats[cursor].GitHubLogin
+				if login != "" && m.database != nil {
+					// Check if user has data
+					hasData, _ := m.database.UserHasData(login)
+					if hasData {
+						m.showUserDetail(login)
+					}
+				}
+			}
+			return m, nil
 		}
 	}
 
@@ -464,11 +578,45 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.addRepoVisible = true
 			m.addRepoInput = ""
 			m.addRepoInputActive = true
-		case 2: // Switch Project
+		case 2: // Query Tagged Users
+			m.menuVisible = false
+			if m.database != nil && m.token != "" {
+				// Get tagged users with GitHub logins
+				taggedUsers, err := m.database.GetTaggedUsersWithLogins(m.repoOwner, m.repoName)
+				if err != nil || len(taggedUsers) == 0 {
+					m.exportMessage = "No tagged users with GitHub logins found"
+				} else {
+					// Filter out already processed users (those showing [!])
+					var logins []string
+					for _, u := range taggedUsers {
+						// Skip users who have already been processed
+						if m.processedLogins != nil && m.processedLogins[u.GitHubLogin] {
+							continue
+						}
+						logins = append(logins, u.GitHubLogin)
+					}
+					if len(logins) == 0 {
+						m.exportMessage = "All tagged users have already been processed"
+					} else {
+						// Start querying users
+						m.queryingUsers = true
+						m.queryTotal = len(logins)
+						m.queryCompleted = 0
+						m.queryFailed = 0
+						if len(logins) > 1 {
+							m.queryLoginsToFetch = logins[1:]
+						}
+						return m, m.startUserQuery(logins[0], 1, m.queryTotal)
+					}
+				}
+			} else if m.token == "" {
+				m.exportMessage = "GitHub token required for user queries"
+			}
+		case 3: // Switch Project
 			m.menuVisible = false
 			m.switchProject = true
 			return m, tea.Quit
-		case 3: // Export Tab to Markdown
+		case 4: // Export Tab to Markdown
 			m.menuVisible = false
 			filename, err := ExportTabToMarkdown(m.stats, m.repoOwner, m.repoName, m.totalCommits, m.showCombined)
 			if err != nil {
@@ -476,7 +624,7 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.exportMessage = fmt.Sprintf("Exported to %s", filename)
 			}
-		case 4: // Export Database Backup
+		case 5: // Export Database Backup
 			m.menuVisible = false
 			if m.dbPath != "" {
 				filename, err := ExportDatabaseBackup(m.dbPath)
@@ -754,10 +902,25 @@ func (m *TUIModel) rebuildTable() {
 		{Title: "%", Width: 7},
 	}
 
+	// Rebuild processed logins cache
+	m.processedLogins = make(map[string]bool)
+	if m.database != nil {
+		for _, s := range m.stats {
+			if s.GitHubLogin != "" {
+				if hasData, _ := m.database.UserHasData(s.GitHubLogin); hasData {
+					m.processedLogins[s.GitHubLogin] = true
+				}
+			}
+		}
+	}
+
 	rows := make([]table.Row, len(m.stats))
 	for i, s := range m.stats {
 		tagMark := "[ ]"
-		if m.tags[s.Email] {
+		// Check if user has been processed (data fetched) - shows [!]
+		if s.GitHubLogin != "" && m.processedLogins[s.GitHubLogin] {
+			tagMark = "[!]"
+		} else if m.tags[s.Email] {
 			tagMark = "[x]"
 		}
 
@@ -809,7 +972,7 @@ func (m *TUIModel) startFetch(owner, name string) tea.Cmd {
 		}
 
 		client := api.NewClient(m.token)
-		
+
 		// Get latest SHA for incremental fetch
 		var latestSHA string
 		if m.database != nil {
@@ -825,12 +988,93 @@ func (m *TUIModel) startFetch(owner, name string) tea.Cmd {
 	}
 }
 
+// startUserQuery returns a tea.Cmd that fetches user repos and gists
+func (m *TUIModel) startUserQuery(login string, current, total int) tea.Cmd {
+	return func() tea.Msg {
+		if m.token == "" {
+			return userQueryCompleteMsg{login: login, err: fmt.Errorf("no GitHub token")}
+		}
+
+		client := api.NewClient(m.token)
+		userData, err := client.FetchUserReposAndGists(login)
+		if err != nil {
+			return userQueryCompleteMsg{login: login, err: err}
+		}
+
+		return userQueryCompleteMsg{login: login, data: userData}
+	}
+}
+
+// handleUserDetailView handles key events in user detail view
+func (m TUIModel) handleUserDetailView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "q":
+		m.userDetailVisible = false
+		return m, nil
+
+	case "tab", "left", "right", "h", "l":
+		// Toggle between repos and gists tabs
+		m.userDetailTab = (m.userDetailTab + 1) % 2
+		m.userDetailCursor = 0
+		return m, nil
+
+	case "up", "k":
+		if m.userDetailCursor > 0 {
+			m.userDetailCursor--
+		}
+		return m, nil
+
+	case "down", "j":
+		maxItems := 0
+		if m.userDetailTab == 0 {
+			maxItems = len(m.userRepos)
+		} else {
+			maxItems = len(m.userGists)
+		}
+		if m.userDetailCursor < maxItems-1 {
+			m.userDetailCursor++
+		}
+		return m, nil
+	}
+
+	return m, nil
+}
+
+// showUserDetail loads user data and shows the detail view
+func (m *TUIModel) showUserDetail(login string) {
+	if m.database == nil {
+		return
+	}
+
+	// Load repos
+	repos, err := m.database.GetUserRepositories(login)
+	if err != nil {
+		repos = []models.UserRepository{}
+	}
+
+	// Load gists
+	gists, err := m.database.GetUserGists(login)
+	if err != nil {
+		gists = []models.UserGist{}
+	}
+
+	m.selectedUserLogin = login
+	m.userRepos = repos
+	m.userGists = gists
+	m.userDetailTab = 0
+	m.userDetailCursor = 0
+	m.userDetailVisible = true
+}
+
 // updateRows refreshes the table rows with current tag state
 func (m *TUIModel) updateRows() {
 	rows := make([]table.Row, len(m.stats))
 	for i, s := range m.stats {
 		tagMark := "[ ]"
-		if m.tags[s.Email] {
+		// Check if user has been processed (data fetched) - shows [!]
+		if s.GitHubLogin != "" && m.processedLogins[s.GitHubLogin] {
+			tagMark = "[!]"
+		} else if m.tags[s.Email] {
 			tagMark = "[x]"
 		}
 
@@ -866,6 +1110,16 @@ func (m TUIModel) View() string {
 	// Show fetching status if in progress
 	if m.fetchingRepo != nil {
 		return m.renderFetchProgress()
+	}
+
+	// Show user query progress if in progress
+	if m.queryingUsers {
+		return m.renderQueryProgress()
+	}
+
+	// Show user detail view if visible
+	if m.userDetailVisible {
+		return m.renderUserDetail()
 	}
 
 	// Show add repo screen if visible
@@ -1101,6 +1355,188 @@ func (m TUIModel) renderFetchPrompt() string {
 	return borderStyle.Render(b.String())
 }
 
+// renderQueryProgress renders the user query progress screen
+func (m TUIModel) renderQueryProgress() string {
+	var b strings.Builder
+
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("15")).
+		MarginBottom(1)
+
+	progressStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("220"))
+
+	b.WriteString(titleStyle.Render("Querying Tagged Users"))
+	b.WriteString("\n\n")
+
+	b.WriteString(progressStyle.Render(m.queryProgress))
+	b.WriteString("\n\n")
+
+	b.WriteString(fmt.Sprintf("Completed: %d / %d", m.queryCompleted, m.queryTotal))
+	if m.queryFailed > 0 {
+		b.WriteString(fmt.Sprintf(" (Failed: %d)", m.queryFailed))
+	}
+	b.WriteString("\n")
+
+	// Add border with minimum width to match main viewport
+	borderStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("196")).
+		Padding(1, 2).
+		Width(108)
+
+	return borderStyle.Render(b.String())
+}
+
+// renderUserDetail renders the user detail view with repos and gists
+func (m TUIModel) renderUserDetail() string {
+	var b strings.Builder
+
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("15"))
+
+	loginStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("226")).
+		Bold(true)
+
+	tabActiveStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("15")).
+		Background(lipgloss.Color("88")).
+		Bold(true).
+		Padding(0, 2)
+
+	tabInactiveStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("15")).
+		Padding(0, 2)
+
+	selectedStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("15")).
+		Background(lipgloss.Color("88")).
+		Bold(true)
+
+	normalStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("15"))
+
+	hintStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("15")).
+		Italic(true)
+
+	// Header
+	b.WriteString(titleStyle.Render("User: "))
+	b.WriteString(loginStyle.Render(m.selectedUserLogin))
+	b.WriteString("\n\n")
+
+	// Tabs
+	if m.userDetailTab == 0 {
+		b.WriteString(tabActiveStyle.Render(fmt.Sprintf("Repos (%d)", len(m.userRepos))))
+	} else {
+		b.WriteString(tabInactiveStyle.Render(fmt.Sprintf("Repos (%d)", len(m.userRepos))))
+	}
+	b.WriteString(" ")
+	if m.userDetailTab == 1 {
+		b.WriteString(tabActiveStyle.Render(fmt.Sprintf("Gists (%d)", len(m.userGists))))
+	} else {
+		b.WriteString(tabInactiveStyle.Render(fmt.Sprintf("Gists (%d)", len(m.userGists))))
+	}
+	b.WriteString("\n\n")
+
+	// Content based on active tab
+	if m.userDetailTab == 0 {
+		// Repos tab
+		if len(m.userRepos) == 0 {
+			b.WriteString(hintStyle.Render("No repositories found."))
+		} else {
+			// Show header
+			b.WriteString(normalStyle.Render(fmt.Sprintf("%-30s %-8s %-8s %-10s", "Name", "Stars", "Forks", "Visibility")))
+			b.WriteString("\n")
+			b.WriteString(normalStyle.Render(strings.Repeat("-", 60)))
+			b.WriteString("\n")
+
+			// Show repos (limited to 15 visible)
+			startIdx := 0
+			if m.userDetailCursor >= 15 {
+				startIdx = m.userDetailCursor - 14
+			}
+			endIdx := startIdx + 15
+			if endIdx > len(m.userRepos) {
+				endIdx = len(m.userRepos)
+			}
+
+			for i := startIdx; i < endIdx; i++ {
+				repo := m.userRepos[i]
+				name := repo.Name
+				if len(name) > 28 {
+					name = name[:25] + "..."
+				}
+				line := fmt.Sprintf("%-30s %-8d %-8d %-10s", name, repo.StargazerCount, repo.ForkCount, repo.Visibility)
+				if i == m.userDetailCursor {
+					b.WriteString(selectedStyle.Render(line))
+				} else {
+					b.WriteString(normalStyle.Render(line))
+				}
+				b.WriteString("\n")
+			}
+		}
+	} else {
+		// Gists tab
+		if len(m.userGists) == 0 {
+			b.WriteString(hintStyle.Render("No gists found."))
+		} else {
+			// Show header
+			b.WriteString(normalStyle.Render(fmt.Sprintf("%-40s %-8s %-8s", "Description", "Stars", "Public")))
+			b.WriteString("\n")
+			b.WriteString(normalStyle.Render(strings.Repeat("-", 60)))
+			b.WriteString("\n")
+
+			// Show gists (limited to 15 visible)
+			startIdx := 0
+			if m.userDetailCursor >= 15 {
+				startIdx = m.userDetailCursor - 14
+			}
+			endIdx := startIdx + 15
+			if endIdx > len(m.userGists) {
+				endIdx = len(m.userGists)
+			}
+
+			for i := startIdx; i < endIdx; i++ {
+				gist := m.userGists[i]
+				desc := gist.Description
+				if desc == "" {
+					desc = gist.Name
+				}
+				if len(desc) > 38 {
+					desc = desc[:35] + "..."
+				}
+				publicStr := "No"
+				if gist.IsPublic {
+					publicStr = "Yes"
+				}
+				line := fmt.Sprintf("%-40s %-8d %-8s", desc, gist.StargazerCount, publicStr)
+				if i == m.userDetailCursor {
+					b.WriteString(selectedStyle.Render(line))
+				} else {
+					b.WriteString(normalStyle.Render(line))
+				}
+				b.WriteString("\n")
+			}
+		}
+	}
+
+	b.WriteString("\n")
+	b.WriteString(hintStyle.Render("left/right: switch tabs | j/k: navigate | Esc: back"))
+
+	// Add border with minimum width to match main viewport
+	borderStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("196")).
+		Padding(1, 2).
+		Width(108)
+
+	return borderStyle.Render(b.String())
+}
+
 // renderFetchProgress renders the fetch progress screen
 func (m TUIModel) renderFetchProgress() string {
 	var b strings.Builder
@@ -1312,7 +1748,7 @@ func (m TUIModel) renderTableWithLinks() string {
 		// Check if pending (yellow background)
 		if pendingEmails[email] {
 			style := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("0")).   // black text
+				Foreground(lipgloss.Color("0")).  // black text
 				Background(lipgloss.Color("220")) // yellow background
 			result[i] = style.Render(line)
 			continue
@@ -1418,7 +1854,7 @@ func RunMultiRepoTUI(
 	}
 
 	model := NewTUIModel(stats, links, tags, domains, firstRepo.Owner, firstRepo.Name, database, tableType, totalCommits, false)
-	
+
 	// Set up multi-repo state
 	model.repos = repos
 	model.currentRepoIndex = 0
@@ -1432,7 +1868,7 @@ func RunMultiRepoTUI(
 	if err != nil {
 		return false, err
 	}
-	
+
 	// Check if user wants to switch projects
 	if m, ok := finalModel.(TUIModel); ok && m.switchProject {
 		return true, nil

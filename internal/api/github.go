@@ -140,3 +140,310 @@ func ParseCommitsFromJSON(data []byte) ([]models.Commit, error) {
 	return commits, nil
 }
 
+// GraphQL endpoint
+const graphQLURL = "https://api.github.com/graphql"
+
+// graphQLRequest represents a GraphQL request
+type graphQLRequest struct {
+	Query string `json:"query"`
+}
+
+// FetchUserReposAndGists fetches all repositories and gists for a GitHub user
+func (c *Client) FetchUserReposAndGists(login string) (*models.UserData, error) {
+	if c.token == "" {
+		return nil, fmt.Errorf("GitHub token required for GraphQL queries")
+	}
+
+	query := buildUserDataQuery(login)
+	
+	reqBody := graphQLRequest{Query: query}
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", graphQLURL, strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GraphQL error (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	return parseUserDataResponse(body, login)
+}
+
+// buildUserDataQuery constructs the GraphQL query for user data
+func buildUserDataQuery(login string) string {
+	return fmt.Sprintf(`
+query {
+  user(login: "%s") {
+    login
+    repositories(first: 100, orderBy: {field: CREATED_AT, direction: DESC}) {
+      totalCount
+      nodes {
+        name
+        owner { login }
+        description
+        url
+        sshUrl
+        homepageUrl
+        diskUsage
+        stargazerCount
+        forkCount
+        isFork
+        isEmpty
+        isInOrganization
+        hasWikiEnabled
+        visibility
+        createdAt
+        updatedAt
+        pushedAt
+      }
+    }
+    gists(first: 100, orderBy: {field: CREATED_AT, direction: DESC}) {
+      totalCount
+      nodes {
+        id
+        name
+        description
+        url
+        resourcePath
+        isPublic
+        isFork
+        stargazerCount
+        createdAt
+        updatedAt
+        pushedAt
+        files {
+          name
+          encodedName
+          extension
+          language { name }
+          size
+          encoding
+          isImage
+          isTruncated
+          text
+        }
+        comments(first: 100) {
+          nodes {
+            id
+            author { login }
+            bodyText
+            createdAt
+            updatedAt
+          }
+        }
+      }
+    }
+  }
+}
+`, login)
+}
+
+// graphQLResponse represents the structure of the GraphQL response
+type graphQLResponse struct {
+	Data struct {
+		User *graphQLUser `json:"user"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+type graphQLUser struct {
+	Login        string `json:"login"`
+	Repositories struct {
+		TotalCount int               `json:"totalCount"`
+		Nodes      []graphQLRepo     `json:"nodes"`
+	} `json:"repositories"`
+	Gists struct {
+		TotalCount int           `json:"totalCount"`
+		Nodes      []graphQLGist `json:"nodes"`
+	} `json:"gists"`
+}
+
+type graphQLRepo struct {
+	Name             string `json:"name"`
+	Owner            struct {
+		Login string `json:"login"`
+	} `json:"owner"`
+	Description      string `json:"description"`
+	URL              string `json:"url"`
+	SSHUrl           string `json:"sshUrl"`
+	HomepageUrl      string `json:"homepageUrl"`
+	DiskUsage        int    `json:"diskUsage"`
+	StargazerCount   int    `json:"stargazerCount"`
+	ForkCount        int    `json:"forkCount"`
+	IsFork           bool   `json:"isFork"`
+	IsEmpty          bool   `json:"isEmpty"`
+	IsInOrganization bool   `json:"isInOrganization"`
+	HasWikiEnabled   bool   `json:"hasWikiEnabled"`
+	Visibility       string `json:"visibility"`
+	CreatedAt        string `json:"createdAt"`
+	UpdatedAt        string `json:"updatedAt"`
+	PushedAt         string `json:"pushedAt"`
+}
+
+type graphQLGist struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Description    string `json:"description"`
+	URL            string `json:"url"`
+	ResourcePath   string `json:"resourcePath"`
+	IsPublic       bool   `json:"isPublic"`
+	IsFork         bool   `json:"isFork"`
+	StargazerCount int    `json:"stargazerCount"`
+	CreatedAt      string `json:"createdAt"`
+	UpdatedAt      string `json:"updatedAt"`
+	PushedAt       string `json:"pushedAt"`
+	Files          []graphQLGistFile `json:"files"`
+	Comments       struct {
+		Nodes []graphQLGistComment `json:"nodes"`
+	} `json:"comments"`
+}
+
+type graphQLGistFile struct {
+	Name        string `json:"name"`
+	EncodedName string `json:"encodedName"`
+	Extension   string `json:"extension"`
+	Language    *struct {
+		Name string `json:"name"`
+	} `json:"language"`
+	Size        int    `json:"size"`
+	Encoding    string `json:"encoding"`
+	IsImage     bool   `json:"isImage"`
+	IsTruncated bool   `json:"isTruncated"`
+	Text        string `json:"text"`
+}
+
+type graphQLGistComment struct {
+	ID     string `json:"id"`
+	Author *struct {
+		Login string `json:"login"`
+	} `json:"author"`
+	BodyText  string `json:"bodyText"`
+	CreatedAt string `json:"createdAt"`
+	UpdatedAt string `json:"updatedAt"`
+}
+
+// parseUserDataResponse parses the GraphQL response into UserData
+func parseUserDataResponse(body []byte, login string) (*models.UserData, error) {
+	var response graphQLResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if len(response.Errors) > 0 {
+		return nil, fmt.Errorf("GraphQL error: %s", response.Errors[0].Message)
+	}
+
+	if response.Data.User == nil {
+		return nil, fmt.Errorf("user not found: %s", login)
+	}
+
+	user := response.Data.User
+	userData := &models.UserData{
+		Login: user.Login,
+	}
+
+	// Convert repositories
+	for _, repo := range user.Repositories.Nodes {
+		userData.Repositories = append(userData.Repositories, models.UserRepository{
+			GitHubLogin:      login,
+			Name:             repo.Name,
+			OwnerLogin:       repo.Owner.Login,
+			Description:      repo.Description,
+			URL:              repo.URL,
+			SSHURL:           repo.SSHUrl,
+			HomepageURL:      repo.HomepageUrl,
+			DiskUsage:        repo.DiskUsage,
+			StargazerCount:   repo.StargazerCount,
+			ForkCount:        repo.ForkCount,
+			IsFork:           repo.IsFork,
+			IsEmpty:          repo.IsEmpty,
+			IsInOrganization: repo.IsInOrganization,
+			HasWikiEnabled:   repo.HasWikiEnabled,
+			Visibility:       repo.Visibility,
+			CreatedAt:        repo.CreatedAt,
+			UpdatedAt:        repo.UpdatedAt,
+			PushedAt:         repo.PushedAt,
+		})
+	}
+
+	// Convert gists
+	for _, gist := range user.Gists.Nodes {
+		userGist := models.UserGist{
+			ID:             gist.ID,
+			GitHubLogin:    login,
+			Name:           gist.Name,
+			Description:    gist.Description,
+			URL:            gist.URL,
+			ResourcePath:   gist.ResourcePath,
+			IsPublic:       gist.IsPublic,
+			IsFork:         gist.IsFork,
+			StargazerCount: gist.StargazerCount,
+			CreatedAt:      gist.CreatedAt,
+			UpdatedAt:      gist.UpdatedAt,
+			PushedAt:       gist.PushedAt,
+		}
+
+		// Convert files
+		for _, file := range gist.Files {
+			lang := ""
+			if file.Language != nil {
+				lang = file.Language.Name
+			}
+			userGist.Files = append(userGist.Files, models.GistFile{
+				GistID:      gist.ID,
+				Name:        file.Name,
+				EncodedName: file.EncodedName,
+				Extension:   file.Extension,
+				Language:    lang,
+				Size:        file.Size,
+				Encoding:    file.Encoding,
+				IsImage:     file.IsImage,
+				IsTruncated: file.IsTruncated,
+				Text:        file.Text,
+			})
+		}
+
+		// Convert comments
+		for _, comment := range gist.Comments.Nodes {
+			authorLogin := ""
+			if comment.Author != nil {
+				authorLogin = comment.Author.Login
+			}
+			userGist.Comments = append(userGist.Comments, models.GistComment{
+				ID:          comment.ID,
+				GistID:      gist.ID,
+				AuthorLogin: authorLogin,
+				BodyText:    comment.BodyText,
+				CreatedAt:   comment.CreatedAt,
+				UpdatedAt:   comment.UpdatedAt,
+			})
+		}
+
+		userData.Gists = append(userData.Gists, userGist)
+	}
+
+	return userData, nil
+}
+

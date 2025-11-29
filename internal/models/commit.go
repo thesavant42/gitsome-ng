@@ -101,3 +101,78 @@ type RepoInfo struct {
 	AddedAt time.Time
 }
 
+// UserRepository represents a repository owned by a GitHub user
+type UserRepository struct {
+	ID               int
+	GitHubLogin      string
+	Name             string
+	OwnerLogin       string
+	Description      string
+	URL              string
+	SSHURL           string
+	HomepageURL      string
+	DiskUsage        int
+	StargazerCount   int
+	ForkCount        int
+	IsFork           bool
+	IsEmpty          bool
+	IsInOrganization bool
+	HasWikiEnabled   bool
+	Visibility       string
+	CreatedAt        string
+	UpdatedAt        string
+	PushedAt         string
+	FetchedAt        time.Time
+}
+
+// UserGist represents a gist owned by a GitHub user
+type UserGist struct {
+	ID             string
+	GitHubLogin    string
+	Name           string
+	Description    string
+	URL            string
+	ResourcePath   string
+	IsPublic       bool
+	IsFork         bool
+	StargazerCount int
+	CreatedAt      string
+	UpdatedAt      string
+	PushedAt       string
+	FetchedAt      time.Time
+	Files          []GistFile    // Populated when fetched
+	Comments       []GistComment // Populated when fetched
+}
+
+// GistFile represents a file within a gist
+type GistFile struct {
+	ID          int
+	GistID      string
+	Name        string
+	EncodedName string
+	Extension   string
+	Language    string
+	Size        int
+	Encoding    string
+	IsImage     bool
+	IsTruncated bool
+	Text        string
+}
+
+// GistComment represents a comment on a gist
+type GistComment struct {
+	ID          string
+	GistID      string
+	AuthorLogin string
+	BodyText    string
+	CreatedAt   string
+	UpdatedAt   string
+}
+
+// UserData contains all fetched data for a user
+type UserData struct {
+	Login        string
+	Repositories []UserRepository
+	Gists        []UserGist
+}
+

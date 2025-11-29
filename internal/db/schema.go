@@ -213,3 +213,180 @@ const selectCombinedTotalCommits = `
 SELECT COUNT(*) FROM commits
 `
 
+// Schema for user repositories (fetched from GitHub for tagged users)
+const createUserRepositoriesTable = `
+CREATE TABLE IF NOT EXISTS user_repositories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    github_login TEXT NOT NULL,
+    name TEXT,
+    owner_login TEXT,
+    description TEXT,
+    url TEXT,
+    ssh_url TEXT,
+    homepage_url TEXT,
+    disk_usage INTEGER,
+    stargazer_count INTEGER,
+    fork_count INTEGER,
+    is_fork BOOLEAN,
+    is_empty BOOLEAN,
+    is_in_organization BOOLEAN,
+    has_wiki_enabled BOOLEAN,
+    visibility TEXT,
+    created_at TEXT,
+    updated_at TEXT,
+    pushed_at TEXT,
+    fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(github_login, owner_login, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_repos_login ON user_repositories(github_login);
+`
+
+// Schema for user gists
+const createUserGistsTable = `
+CREATE TABLE IF NOT EXISTS user_gists (
+    id TEXT PRIMARY KEY,
+    github_login TEXT NOT NULL,
+    name TEXT,
+    description TEXT,
+    url TEXT,
+    resource_path TEXT,
+    is_public BOOLEAN,
+    is_fork BOOLEAN,
+    stargazer_count INTEGER,
+    created_at TEXT,
+    updated_at TEXT,
+    pushed_at TEXT,
+    fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_gists_login ON user_gists(github_login);
+`
+
+// Schema for gist files
+const createGistFilesTable = `
+CREATE TABLE IF NOT EXISTS gist_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    gist_id TEXT NOT NULL,
+    name TEXT,
+    encoded_name TEXT,
+    extension TEXT,
+    language TEXT,
+    size INTEGER,
+    encoding TEXT,
+    is_image BOOLEAN,
+    is_truncated BOOLEAN,
+    text TEXT,
+    FOREIGN KEY(gist_id) REFERENCES user_gists(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_gist_files_gist ON gist_files(gist_id);
+`
+
+// Schema for gist comments
+const createGistCommentsTable = `
+CREATE TABLE IF NOT EXISTS gist_comments (
+    id TEXT PRIMARY KEY,
+    gist_id TEXT NOT NULL,
+    author_login TEXT,
+    body_text TEXT,
+    created_at TEXT,
+    updated_at TEXT,
+    FOREIGN KEY(gist_id) REFERENCES user_gists(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_gist_comments_gist ON gist_comments(gist_id);
+`
+
+// SQL queries for user repositories
+const insertUserRepository = `
+INSERT OR REPLACE INTO user_repositories (
+    github_login, name, owner_login, description, url, ssh_url, homepage_url,
+    disk_usage, stargazer_count, fork_count, is_fork, is_empty, is_in_organization,
+    has_wiki_enabled, visibility, created_at, updated_at, pushed_at, fetched_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+`
+
+const selectUserRepositories = `
+SELECT id, github_login, name, owner_login, description, url, ssh_url, homepage_url,
+       disk_usage, stargazer_count, fork_count, is_fork, is_empty, is_in_organization,
+       has_wiki_enabled, visibility, created_at, updated_at, pushed_at, fetched_at
+FROM user_repositories
+WHERE github_login = ?
+ORDER BY stargazer_count DESC, name ASC
+`
+
+const selectUserRepositoryCount = `
+SELECT COUNT(*) FROM user_repositories WHERE github_login = ?
+`
+
+const deleteUserRepositories = `
+DELETE FROM user_repositories WHERE github_login = ?
+`
+
+// SQL queries for user gists
+const insertUserGist = `
+INSERT OR REPLACE INTO user_gists (
+    id, github_login, name, description, url, resource_path,
+    is_public, is_fork, stargazer_count, created_at, updated_at, pushed_at, fetched_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+`
+
+const selectUserGists = `
+SELECT id, github_login, name, description, url, resource_path,
+       is_public, is_fork, stargazer_count, created_at, updated_at, pushed_at, fetched_at
+FROM user_gists
+WHERE github_login = ?
+ORDER BY created_at DESC
+`
+
+const selectUserGistCount = `
+SELECT COUNT(*) FROM user_gists WHERE github_login = ?
+`
+
+const deleteUserGists = `
+DELETE FROM user_gists WHERE github_login = ?
+`
+
+// SQL queries for gist files
+const insertGistFile = `
+INSERT INTO gist_files (
+    gist_id, name, encoded_name, extension, language, size, encoding, is_image, is_truncated, text
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+const selectGistFiles = `
+SELECT id, gist_id, name, encoded_name, extension, language, size, encoding, is_image, is_truncated, text
+FROM gist_files
+WHERE gist_id = ?
+ORDER BY name ASC
+`
+
+const deleteGistFiles = `
+DELETE FROM gist_files WHERE gist_id = ?
+`
+
+// SQL queries for gist comments
+const insertGistComment = `
+INSERT OR REPLACE INTO gist_comments (
+    id, gist_id, author_login, body_text, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?)
+`
+
+const selectGistComments = `
+SELECT id, gist_id, author_login, body_text, created_at, updated_at
+FROM gist_comments
+WHERE gist_id = ?
+ORDER BY created_at ASC
+`
+
+const deleteGistComments = `
+DELETE FROM gist_comments WHERE gist_id = ?
+`
+
+// Check if user has fetched data
+const selectUserHasData = `
+SELECT EXISTS(SELECT 1 FROM user_repositories WHERE github_login = ?)
+   OR EXISTS(SELECT 1 FROM user_gists WHERE github_login = ?)
+`
+

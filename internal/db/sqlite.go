@@ -62,6 +62,30 @@ func New(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("failed to create tracked repos schema: %w", err)
 	}
 
+	// Initialize user repositories table
+	if _, err := conn.Exec(createUserRepositoriesTable); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to create user repositories schema: %w", err)
+	}
+
+	// Initialize user gists table
+	if _, err := conn.Exec(createUserGistsTable); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to create user gists schema: %w", err)
+	}
+
+	// Initialize gist files table
+	if _, err := conn.Exec(createGistFilesTable); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to create gist files schema: %w", err)
+	}
+
+	// Initialize gist comments table
+	if _, err := conn.Exec(createGistCommentsTable); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to create gist comments schema: %w", err)
+	}
+
 	return &DB{conn: conn}, nil
 }
 
@@ -445,5 +469,328 @@ func parseTimestamp(ts string) (time.Time, error) {
 		}
 	}
 	return time.Time{}, fmt.Errorf("unable to parse timestamp: %s", ts)
+}
+
+// SaveUserRepository saves a user's repository to the database
+func (db *DB) SaveUserRepository(repo models.UserRepository) error {
+	_, err := db.conn.Exec(insertUserRepository,
+		repo.GitHubLogin, repo.Name, repo.OwnerLogin, repo.Description,
+		repo.URL, repo.SSHURL, repo.HomepageURL, repo.DiskUsage,
+		repo.StargazerCount, repo.ForkCount, repo.IsFork, repo.IsEmpty,
+		repo.IsInOrganization, repo.HasWikiEnabled, repo.Visibility,
+		repo.CreatedAt, repo.UpdatedAt, repo.PushedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to save user repository: %w", err)
+	}
+	return nil
+}
+
+// SaveUserRepositories saves multiple user repositories in a transaction
+func (db *DB) SaveUserRepositories(repos []models.UserRepository) error {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(insertUserRepository)
+	if err != nil {
+		return fmt.Errorf("failed to prepare statement: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, repo := range repos {
+		_, err := stmt.Exec(
+			repo.GitHubLogin, repo.Name, repo.OwnerLogin, repo.Description,
+			repo.URL, repo.SSHURL, repo.HomepageURL, repo.DiskUsage,
+			repo.StargazerCount, repo.ForkCount, repo.IsFork, repo.IsEmpty,
+			repo.IsInOrganization, repo.HasWikiEnabled, repo.Visibility,
+			repo.CreatedAt, repo.UpdatedAt, repo.PushedAt,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to save user repository %s: %w", repo.Name, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	return nil
+}
+
+// GetUserRepositories returns all repositories for a GitHub user
+func (db *DB) GetUserRepositories(githubLogin string) ([]models.UserRepository, error) {
+	rows, err := db.conn.Query(selectUserRepositories, githubLogin)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query user repositories: %w", err)
+	}
+	defer rows.Close()
+
+	var repos []models.UserRepository
+	for rows.Next() {
+		var r models.UserRepository
+		var fetchedAt string
+		if err := rows.Scan(
+			&r.ID, &r.GitHubLogin, &r.Name, &r.OwnerLogin, &r.Description,
+			&r.URL, &r.SSHURL, &r.HomepageURL, &r.DiskUsage,
+			&r.StargazerCount, &r.ForkCount, &r.IsFork, &r.IsEmpty,
+			&r.IsInOrganization, &r.HasWikiEnabled, &r.Visibility,
+			&r.CreatedAt, &r.UpdatedAt, &r.PushedAt, &fetchedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan user repository: %w", err)
+		}
+		r.FetchedAt, _ = parseTimestamp(fetchedAt)
+		repos = append(repos, r)
+	}
+	return repos, nil
+}
+
+// GetUserRepositoryCount returns the count of repositories for a user
+func (db *DB) GetUserRepositoryCount(githubLogin string) (int, error) {
+	var count int
+	err := db.conn.QueryRow(selectUserRepositoryCount, githubLogin).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get user repository count: %w", err)
+	}
+	return count, nil
+}
+
+// DeleteUserRepositories removes all repositories for a user
+func (db *DB) DeleteUserRepositories(githubLogin string) error {
+	_, err := db.conn.Exec(deleteUserRepositories, githubLogin)
+	if err != nil {
+		return fmt.Errorf("failed to delete user repositories: %w", err)
+	}
+	return nil
+}
+
+// SaveUserGist saves a user's gist to the database
+func (db *DB) SaveUserGist(gist models.UserGist) error {
+	_, err := db.conn.Exec(insertUserGist,
+		gist.ID, gist.GitHubLogin, gist.Name, gist.Description,
+		gist.URL, gist.ResourcePath, gist.IsPublic, gist.IsFork,
+		gist.StargazerCount, gist.CreatedAt, gist.UpdatedAt, gist.PushedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to save user gist: %w", err)
+	}
+	return nil
+}
+
+// SaveUserGists saves multiple user gists in a transaction
+func (db *DB) SaveUserGists(gists []models.UserGist) error {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	gistStmt, err := tx.Prepare(insertUserGist)
+	if err != nil {
+		return fmt.Errorf("failed to prepare gist statement: %w", err)
+	}
+	defer gistStmt.Close()
+
+	fileStmt, err := tx.Prepare(insertGistFile)
+	if err != nil {
+		return fmt.Errorf("failed to prepare file statement: %w", err)
+	}
+	defer fileStmt.Close()
+
+	commentStmt, err := tx.Prepare(insertGistComment)
+	if err != nil {
+		return fmt.Errorf("failed to prepare comment statement: %w", err)
+	}
+	defer commentStmt.Close()
+
+	for _, gist := range gists {
+		_, err := gistStmt.Exec(
+			gist.ID, gist.GitHubLogin, gist.Name, gist.Description,
+			gist.URL, gist.ResourcePath, gist.IsPublic, gist.IsFork,
+			gist.StargazerCount, gist.CreatedAt, gist.UpdatedAt, gist.PushedAt,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to save gist %s: %w", gist.ID, err)
+		}
+
+		// Save files
+		for _, file := range gist.Files {
+			_, err := fileStmt.Exec(
+				gist.ID, file.Name, file.EncodedName, file.Extension,
+				file.Language, file.Size, file.Encoding, file.IsImage, file.IsTruncated, file.Text,
+			)
+			if err != nil {
+				return fmt.Errorf("failed to save gist file %s: %w", file.Name, err)
+			}
+		}
+
+		// Save comments
+		for _, comment := range gist.Comments {
+			_, err := commentStmt.Exec(
+				comment.ID, gist.ID, comment.AuthorLogin, comment.BodyText,
+				comment.CreatedAt, comment.UpdatedAt,
+			)
+			if err != nil {
+				return fmt.Errorf("failed to save gist comment %s: %w", comment.ID, err)
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	return nil
+}
+
+// GetUserGists returns all gists for a GitHub user
+func (db *DB) GetUserGists(githubLogin string) ([]models.UserGist, error) {
+	rows, err := db.conn.Query(selectUserGists, githubLogin)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query user gists: %w", err)
+	}
+	defer rows.Close()
+
+	var gists []models.UserGist
+	for rows.Next() {
+		var g models.UserGist
+		var fetchedAt string
+		if err := rows.Scan(
+			&g.ID, &g.GitHubLogin, &g.Name, &g.Description,
+			&g.URL, &g.ResourcePath, &g.IsPublic, &g.IsFork,
+			&g.StargazerCount, &g.CreatedAt, &g.UpdatedAt, &g.PushedAt, &fetchedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan user gist: %w", err)
+		}
+		g.FetchedAt, _ = parseTimestamp(fetchedAt)
+		gists = append(gists, g)
+	}
+	return gists, nil
+}
+
+// GetUserGistCount returns the count of gists for a user
+func (db *DB) GetUserGistCount(githubLogin string) (int, error) {
+	var count int
+	err := db.conn.QueryRow(selectUserGistCount, githubLogin).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get user gist count: %w", err)
+	}
+	return count, nil
+}
+
+// DeleteUserGists removes all gists for a user (cascade deletes files and comments)
+func (db *DB) DeleteUserGists(githubLogin string) error {
+	// First get all gist IDs for this user to delete files and comments
+	rows, err := db.conn.Query("SELECT id FROM user_gists WHERE github_login = ?", githubLogin)
+	if err != nil {
+		return fmt.Errorf("failed to query gist IDs: %w", err)
+	}
+	defer rows.Close()
+
+	var gistIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return fmt.Errorf("failed to scan gist ID: %w", err)
+		}
+		gistIDs = append(gistIDs, id)
+	}
+
+	// Delete files and comments for each gist
+	for _, gistID := range gistIDs {
+		if _, err := db.conn.Exec(deleteGistFiles, gistID); err != nil {
+			return fmt.Errorf("failed to delete gist files: %w", err)
+		}
+		if _, err := db.conn.Exec(deleteGistComments, gistID); err != nil {
+			return fmt.Errorf("failed to delete gist comments: %w", err)
+		}
+	}
+
+	// Delete gists
+	_, err = db.conn.Exec(deleteUserGists, githubLogin)
+	if err != nil {
+		return fmt.Errorf("failed to delete user gists: %w", err)
+	}
+	return nil
+}
+
+// GetGistFiles returns all files for a gist
+func (db *DB) GetGistFiles(gistID string) ([]models.GistFile, error) {
+	rows, err := db.conn.Query(selectGistFiles, gistID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query gist files: %w", err)
+	}
+	defer rows.Close()
+
+	var files []models.GistFile
+	for rows.Next() {
+		var f models.GistFile
+		if err := rows.Scan(
+			&f.ID, &f.GistID, &f.Name, &f.EncodedName, &f.Extension,
+			&f.Language, &f.Size, &f.Encoding, &f.IsImage, &f.IsTruncated, &f.Text,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan gist file: %w", err)
+		}
+		files = append(files, f)
+	}
+	return files, nil
+}
+
+// GetGistComments returns all comments for a gist
+func (db *DB) GetGistComments(gistID string) ([]models.GistComment, error) {
+	rows, err := db.conn.Query(selectGistComments, gistID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query gist comments: %w", err)
+	}
+	defer rows.Close()
+
+	var comments []models.GistComment
+	for rows.Next() {
+		var c models.GistComment
+		if err := rows.Scan(
+			&c.ID, &c.GistID, &c.AuthorLogin, &c.BodyText, &c.CreatedAt, &c.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan gist comment: %w", err)
+		}
+		comments = append(comments, c)
+	}
+	return comments, nil
+}
+
+// UserHasData checks if a user has any fetched repositories or gists
+func (db *DB) UserHasData(githubLogin string) (bool, error) {
+	var hasData bool
+	err := db.conn.QueryRow(selectUserHasData, githubLogin, githubLogin).Scan(&hasData)
+	if err != nil {
+		return false, fmt.Errorf("failed to check user data: %w", err)
+	}
+	return hasData, nil
+}
+
+// GetTaggedUsersWithLogins returns tagged users that have GitHub logins for the current repo
+func (db *DB) GetTaggedUsersWithLogins(repoOwner, repoName string) ([]models.ContributorStats, error) {
+	// Join tags with commits to get users with GitHub logins
+	query := `
+		SELECT DISTINCT c.committer_name, c.committer_email, COALESCE(c.github_committer_login, '') as github_login
+		FROM committer_tags t
+		JOIN commits c ON t.committer_email = c.committer_email
+		WHERE t.repo_owner = ? AND t.repo_name = ?
+		AND c.github_committer_login IS NOT NULL AND c.github_committer_login != ''
+	`
+	rows, err := db.conn.Query(query, repoOwner, repoName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query tagged users: %w", err)
+	}
+	defer rows.Close()
+
+	var users []models.ContributorStats
+	for rows.Next() {
+		var u models.ContributorStats
+		if err := rows.Scan(&u.Name, &u.Email, &u.GitHubLogin); err != nil {
+			return nil, fmt.Errorf("failed to scan tagged user: %w", err)
+		}
+		users = append(users, u)
+	}
+	return users, nil
 }
 
