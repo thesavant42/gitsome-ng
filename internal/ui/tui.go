@@ -16,10 +16,6 @@ import (
 )
 
 // Message types for async operations
-type fetchStartMsg struct {
-	owner string
-	name  string
-}
 
 // SwitchProjectMsg signals the TUI to exit and return to project selector
 type SwitchProjectMsg struct{}
@@ -37,9 +33,6 @@ type fetchCompleteMsg struct {
 }
 
 // User data fetch messages
-type userQueryStartMsg struct {
-	logins []string
-}
 
 type userQueryProgressMsg struct {
 	login    string
@@ -53,23 +46,10 @@ type userQueryCompleteMsg struct {
 	err   error
 }
 
-type userQueryDoneMsg struct {
-	total     int
-	succeeded int
-	failed    int
-}
 
-// Color palette for link groups
-var linkColors = []lipgloss.Color{
-	lipgloss.Color("86"),  // cyan
-	lipgloss.Color("226"), // bright yellow
-	lipgloss.Color("213"), // magenta
-	lipgloss.Color("208"), // orange
-	lipgloss.Color("141"), // purple
-	lipgloss.Color("220"), // yellow
-	lipgloss.Color("39"),  // blue
-	lipgloss.Color("196"), // red
-}
+// Color palette for link groups - use from styles.go
+// (keeping local reference for compatibility)
+var linkColors = LinkColors
 
 // Menu options
 var menuOptions = []string{
@@ -108,6 +88,9 @@ type TUIModel struct {
 	cached       bool
 	quitting     bool
 	helpVisible  bool
+
+	// Layout state
+	layout Layout
 
 	// Menu state
 	menuVisible bool
@@ -153,13 +136,13 @@ type TUIModel struct {
 	queryLoginsToFetch []string // logins remaining to fetch
 
 	// User detail view state
-	userDetailVisible  bool                    // showing user detail view
-	selectedUserLogin  string                  // which user we're viewing
-	userRepos          []models.UserRepository // repos for selected user
-	userGists          []models.UserGist       // gists for selected user
-	userGistFiles      []gistFileEntry         // flattened gist files for display
-	userDetailTab      int                     // 0 = repos, 1 = gists/files
-	userDetailCursor   int                     // cursor position in detail view
+	userDetailVisible bool                    // showing user detail view
+	selectedUserLogin string                  // which user we're viewing
+	userRepos         []models.UserRepository // repos for selected user
+	userGists         []models.UserGist       // gists for selected user
+	userGistFiles     []gistFileEntry         // flattened gist files for display
+	userDetailTab     int                     // 0 = repos, 1 = gists/files
+	userDetailCursor  int                     // cursor position in detail view
 
 	// Processed users cache - logins with fetched data show [!] instead of [x]
 	processedLogins map[string]bool
@@ -177,16 +160,8 @@ func NewTUIModel(
 	totalCommits int,
 	cached bool,
 ) TUIModel {
-	// Define columns with Tag column
-	columns := []table.Column{
-		{Title: "Tag", Width: 5},
-		{Title: "Rank", Width: 6},
-		{Title: "Name", Width: 20},
-		{Title: "GitHub Login", Width: 15},
-		{Title: "Email", Width: 40},
-		{Title: "Commits", Width: 8},
-		{Title: "%", Width: 7},
-	}
+	// Use centralized column definitions from styles.go
+	columns := TableColumns
 
 	// Build processed logins cache - check which users have fetched data
 	processedLogins := make(map[string]bool)
@@ -227,28 +202,28 @@ func NewTUIModel(
 		}
 	}
 
-	// Create table with styled headers
+	// Create table with styled headers, using centralized height from styles.go
 	t := table.New(
 		table.WithColumns(columns),
 		table.WithRows(rows),
 		table.WithFocused(true),
-		table.WithHeight(20),
+		table.WithHeight(TableHeight),
 	)
 
-	// Apply styles - purple borders, bright white header text
+	// Apply styles using centralized colors from styles.go
 	s := table.DefaultStyles()
 	s.Header = s.Header.
 		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("196")). // red border
+		BorderForeground(ColorBorder).
 		BorderBottom(true).
 		Bold(true).
-		Foreground(lipgloss.Color("15")) // bright white text
+		Foreground(ColorText)
 
 	// Note: Cell foreground is set in renderTableWithLinks to avoid conflicts with link colors
 
 	s.Selected = s.Selected.
-		Foreground(lipgloss.Color("15")).
-		Background(lipgloss.Color("88")).
+		Foreground(ColorText).
+		Background(ColorHighlight).
 		Bold(true)
 
 	t.SetStyles(s)
@@ -273,6 +248,7 @@ func NewTUIModel(
 		totalCommits:     totalCommits,
 		cached:           cached,
 		processedLogins:  processedLogins,
+		layout:           DefaultLayout(),
 	}
 }
 
@@ -286,6 +262,11 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
+	// Handle window resize
+	case tea.WindowSizeMsg:
+		m.layout = NewLayout(msg.Width)
+		return m, nil
+
 	// Handle async fetch messages
 	case fetchProgressMsg:
 		m.fetchProgress = fmt.Sprintf("Fetching commits... %d fetched (page %d)", msg.fetched, msg.page)
@@ -936,15 +917,8 @@ func (m *TUIModel) switchToCombined() {
 
 // rebuildTable recreates the table with current stats
 func (m *TUIModel) rebuildTable() {
-	columns := []table.Column{
-		{Title: "Tag", Width: 5},
-		{Title: "Rank", Width: 6},
-		{Title: "Name", Width: 20},
-		{Title: "GitHub Login", Width: 15},
-		{Title: "Email", Width: 40},
-		{Title: "Commits", Width: 8},
-		{Title: "%", Width: 7},
-	}
+	// Use centralized column definitions from styles.go
+	columns := TableColumns
 
 	// Rebuild processed logins cache
 	m.processedLogins = make(map[string]bool)
@@ -988,20 +962,20 @@ func (m *TUIModel) rebuildTable() {
 		table.WithColumns(columns),
 		table.WithRows(rows),
 		table.WithFocused(true),
-		table.WithHeight(20),
+		table.WithHeight(TableHeight),
 	)
 
 	s := table.DefaultStyles()
 	s.Header = s.Header.
 		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("196")).
+		BorderForeground(ColorBorder).
 		BorderBottom(true).
 		Bold(true).
-		Foreground(lipgloss.Color("15"))
+		Foreground(ColorText)
 
 	s.Selected = s.Selected.
-		Foreground(lipgloss.Color("15")).
-		Background(lipgloss.Color("88")).
+		Foreground(ColorText).
+		Background(ColorHighlight).
 		Bold(true)
 
 	t.SetStyles(s)
@@ -1033,7 +1007,7 @@ func (m *TUIModel) startFetch(owner, name string) tea.Cmd {
 }
 
 // startUserQuery returns a tea.Cmd that fetches user repos and gists
-func (m *TUIModel) startUserQuery(login string, current, total int) tea.Cmd {
+func (m *TUIModel) startUserQuery(login string, _, _ int) tea.Cmd {
 	return func() tea.Msg {
 		if m.token == "" {
 			return userQueryCompleteMsg{login: login, err: fmt.Errorf("no GitHub token")}
@@ -1229,6 +1203,9 @@ func (m TUIModel) View() string {
 
 	var b strings.Builder
 
+	// Add top margin to avoid terminal edge
+	b.WriteString("\n")
+
 	// Render page indicator if multiple repos
 	if len(m.repos) > 0 {
 		pageIndicator := m.renderPageIndicator()
@@ -1239,17 +1216,15 @@ func (m TUIModel) View() string {
 	// Render the table with border and custom row colors for links
 	tableView := m.renderTableWithLinks()
 
-	// Add border around table
-	borderStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("196")) // red
-
-	b.WriteString(borderStyle.Render(tableView))
+	// Add border around table using centralized style with dynamic width
+	borderedTable := BorderStyle.
+		Width(m.layout.ViewportWidth).
+		Render(tableView)
+	b.WriteString(borderedTable)
 	b.WriteString("\n")
 
 	// Footer: stats on left, help in center, total commits on right
 	if m.helpVisible {
-		helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
 		help := `
 Keyboard Controls:
   j/k or up/down Navigate rows
@@ -1264,12 +1239,9 @@ Keyboard Controls:
 
 Tags: [ ]=untagged, [x]=tagged, [!]=scanned (press T to clear for re-scan)
 `
-		b.WriteString(helpStyle.Render(help))
+		b.WriteString(NormalStyle.Render(help))
 	} else {
 		// Build footer with three sections
-		statsStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15"))
-		hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Italic(true)
-		totalStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15"))
 
 		leftPart := fmt.Sprintf("Total Committers: %d", len(m.stats))
 		if len(m.pendingLinks) > 0 {
@@ -1278,33 +1250,32 @@ Tags: [ ]=untagged, [x]=tagged, [!]=scanned (press T to clear for re-scan)
 
 		centerPart := "Press ? for help, q to quit"
 		if m.cached {
-			cachedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("226")).Bold(true)
-			centerPart += " | " + cachedStyle.Render("CACHED")
+			centerPart += " | " + AccentStyle.Render("CACHED")
 		}
 		if m.exportMessage != "" {
-			exportStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("226")).Bold(true)
-			centerPart = exportStyle.Render(m.exportMessage)
+			centerPart = AccentStyle.Render(m.exportMessage)
 		}
 
 		rightPart := fmt.Sprintf("Total Commits: %d", m.totalCommits)
 
-		// Calculate spacing (table is roughly 108 chars wide inside border)
-		// Account for 2-char left padding to align with table border
-		tableWidth := 108
+		// Calculate spacing to fit within ViewportWidth
+		// The footer sits below the border, so it should match ViewportWidth
+		// Subtract 1 for the leading space
+		availableWidth := m.layout.ViewportWidth - 1
 		usedWidth := len(leftPart) + len(centerPart) + len(rightPart)
-		remainingSpace := tableWidth - usedWidth
+		remainingSpace := availableWidth - usedWidth
 		if remainingSpace < 4 {
 			remainingSpace = 4
 		}
 		leftSpacing := remainingSpace / 2
 		rightSpacing := remainingSpace - leftSpacing
 
-		// Add left padding to align with table border
-		footer := "  " + statsStyle.Render(leftPart) +
+		// Build footer line - add leading padding to align with border left edge
+		footer := " " + StatsStyle.Render(leftPart) +
 			strings.Repeat(" ", leftSpacing) +
-			hintStyle.Render(centerPart) +
+			HintStyle.Render(centerPart) +
 			strings.Repeat(" ", rightSpacing) +
-			totalStyle.Render(rightPart)
+			StatsStyle.Render(rightPart)
 
 		b.WriteString(footer)
 	}
@@ -1313,60 +1284,145 @@ Tags: [ ]=untagged, [x]=tagged, [!]=scanned (press T to clear for re-scan)
 }
 
 // renderPageIndicator renders the page indicator for multi-repo navigation
+// The arrows are clamped to viewport edges, tabs scroll if they overflow
 func (m TUIModel) renderPageIndicator() string {
 	if len(m.repos) == 0 {
 		return ""
 	}
 
-	var b strings.Builder
 	activeStyle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("15")).
-		Background(lipgloss.Color("88")).
+		Foreground(ColorText).
+		Background(ColorHighlight).
 		Padding(0, 1)
 
 	inactiveStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("15")).
+		Foreground(ColorText).
 		Padding(0, 1)
 
-	arrowStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("196")).
-		Bold(true)
-
-	// Add left padding to align with table border (2 spaces for border + padding)
-	b.WriteString("  ")
-
-	// Left arrow
-	if m.currentRepoIndex > 0 || m.showCombined {
-		b.WriteString(arrowStyle.Render("<"))
-	} else {
-		b.WriteString(" ")
+	// Build all tab labels with their rendered widths
+	type tabInfo struct {
+		label    string
+		rendered string
+		width    int
+		active   bool
 	}
-	b.WriteString(" ")
 
-	// Repo pages
+	var tabs []tabInfo
 	for i, repo := range m.repos {
 		label := fmt.Sprintf("%s/%s", repo.Owner, repo.Name)
-		if i == m.currentRepoIndex && !m.showCombined {
-			b.WriteString(activeStyle.Render(label))
+		active := (i == m.currentRepoIndex && !m.showCombined)
+		var rendered string
+		if active {
+			rendered = activeStyle.Render(label)
 		} else {
-			b.WriteString(inactiveStyle.Render(label))
+			rendered = inactiveStyle.Render(label)
 		}
+		tabs = append(tabs, tabInfo{label, rendered, lipgloss.Width(rendered) + 1, active}) // +1 for space
+	}
+
+	// Add Combined tab
+	combinedLabel := "Combined"
+	var combinedRendered string
+	if m.showCombined {
+		combinedRendered = activeStyle.Render(combinedLabel)
+	} else {
+		combinedRendered = inactiveStyle.Render(combinedLabel)
+	}
+	tabs = append(tabs, tabInfo{combinedLabel, combinedRendered, lipgloss.Width(combinedRendered), m.showCombined})
+
+	// Calculate available width for tabs (viewport - left padding - arrows - right padding)
+	// Layout: "  < [tabs] >"  =>  2 + 2 + tabs + 2 = viewport
+	availableWidth := m.layout.ViewportWidth - 6
+
+	// Find which tabs to display, keeping active tab visible
+	activeIdx := len(tabs) - 1 // Combined
+	if !m.showCombined {
+		activeIdx = m.currentRepoIndex
+	}
+
+	// Calculate visible range
+	startIdx := 0
+	endIdx := len(tabs)
+
+	// Calculate total width of all tabs
+	totalWidth := 0
+	for _, t := range tabs {
+		totalWidth += t.width
+	}
+
+	// If tabs fit, show all
+	if totalWidth <= availableWidth {
+		startIdx = 0
+		endIdx = len(tabs)
+	} else {
+		// Need to scroll - keep active tab visible
+		// Start from active and expand in both directions
+		startIdx = activeIdx
+		endIdx = activeIdx + 1
+		currentWidth := tabs[activeIdx].width
+
+		// Expand left and right alternately
+		for {
+			expanded := false
+			// Try expanding left
+			if startIdx > 0 && currentWidth+tabs[startIdx-1].width <= availableWidth {
+				startIdx--
+				currentWidth += tabs[startIdx].width
+				expanded = true
+			}
+			// Try expanding right
+			if endIdx < len(tabs) && currentWidth+tabs[endIdx].width <= availableWidth {
+				currentWidth += tabs[endIdx].width
+				endIdx++
+				expanded = true
+			}
+			if !expanded {
+				break
+			}
+		}
+	}
+
+	// Build the tab bar
+	var tabsStr strings.Builder
+	for i := startIdx; i < endIdx; i++ {
+		tabsStr.WriteString(tabs[i].rendered)
+		if i < endIdx-1 {
+			tabsStr.WriteString(" ")
+		}
+	}
+
+	// Calculate padding to push right arrow to edge
+	tabsRendered := tabsStr.String()
+	tabsWidth := lipgloss.Width(tabsRendered)
+	rightPadding := availableWidth - tabsWidth
+	if rightPadding < 0 {
+		rightPadding = 0
+	}
+
+	// Build final string with arrows clamped to edges
+	var b strings.Builder
+	b.WriteString("  ") // Left padding to align with border
+
+	// Left arrow - show if we can scroll left
+	if startIdx > 0 {
+		b.WriteString(ArrowStyle.Render("<"))
+	} else if m.currentRepoIndex > 0 || m.showCombined {
+		b.WriteString(ArrowStyle.Render("<"))
+	} else {
 		b.WriteString(" ")
 	}
-
-	// Combined stats page
-	if m.showCombined {
-		b.WriteString(activeStyle.Render("Combined"))
-	} else {
-		b.WriteString(inactiveStyle.Render("Combined"))
-	}
-
 	b.WriteString(" ")
 
-	// Right arrow
-	if !m.showCombined {
-		b.WriteString(arrowStyle.Render(">"))
+	// Tabs
+	b.WriteString(tabsRendered)
+
+	// Right padding
+	b.WriteString(strings.Repeat(" ", rightPadding))
+
+	// Right arrow - show if we can scroll right or navigate right
+	if endIdx < len(tabs) || !m.showCombined {
+		b.WriteString(ArrowStyle.Render(">"))
 	} else {
 		b.WriteString(" ")
 	}
@@ -1378,37 +1434,21 @@ func (m TUIModel) renderPageIndicator() string {
 func (m TUIModel) renderAddRepo() string {
 	var b strings.Builder
 
-	titleStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("15")).
-		MarginBottom(1)
-
-	hintStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("15")).
-		Italic(true)
-
-	inputStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("226")).
-		Bold(true)
-
-	b.WriteString(titleStyle.Render("Add Repository"))
+	b.WriteString(TitleStyle.Render("Add Repository"))
 	b.WriteString("\n\n")
 
-	b.WriteString(hintStyle.Render("Enter repository in owner/repo format:"))
+	b.WriteString(HintStyle.Render("Enter repository in owner/repo format:"))
 	b.WriteString("\n\n")
 
-	b.WriteString(inputStyle.Render("> "))
+	b.WriteString(AccentStyle.Render("> "))
 	b.WriteString(m.addRepoInput)
 	b.WriteString("_")
 	b.WriteString("\n\n")
 
-	b.WriteString(hintStyle.Render("Enter: add repository | Esc: cancel"))
+	b.WriteString(HintStyle.Render("Enter: add repository | Esc: cancel"))
 
-	// Add border
-	borderStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("196")).
-		Padding(1, 2)
+	// Add border with width from layout
+	borderStyle := BorderStyle.Padding(1, 2).Width(m.layout.ViewportWidth).MarginTop(1)
 
 	return borderStyle.Render(b.String())
 }
@@ -1417,35 +1457,19 @@ func (m TUIModel) renderAddRepo() string {
 func (m TUIModel) renderFetchPrompt() string {
 	var b strings.Builder
 
-	titleStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("15")).
-		MarginBottom(1)
-
-	repoStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("226")).
-		Bold(true)
-
-	hintStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("15")).
-		Italic(true)
-
-	b.WriteString(titleStyle.Render("Fetch Commits"))
+	b.WriteString(TitleStyle.Render("Fetch Commits"))
 	b.WriteString("\n\n")
 
 	b.WriteString("Repository ")
-	b.WriteString(repoStyle.Render(fmt.Sprintf("%s/%s", m.fetchPromptRepo.Owner, m.fetchPromptRepo.Name)))
+	b.WriteString(AccentStyle.Render(fmt.Sprintf("%s/%s", m.fetchPromptRepo.Owner, m.fetchPromptRepo.Name)))
 	b.WriteString(" has no cached commits.\n\n")
 
 	b.WriteString("Fetch commits from GitHub API?\n\n")
 
-	b.WriteString(hintStyle.Render("Y: Fetch commits | N/Esc: Skip"))
+	b.WriteString(HintStyle.Render("Y: Fetch commits | N/Esc: Skip"))
 
-	// Add border
-	borderStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("196")).
-		Padding(1, 2)
+	// Add border with width from layout
+	borderStyle := BorderStyle.Padding(1, 2).Width(m.layout.ViewportWidth).MarginTop(1)
 
 	return borderStyle.Render(b.String())
 }
@@ -1454,18 +1478,10 @@ func (m TUIModel) renderFetchPrompt() string {
 func (m TUIModel) renderQueryProgress() string {
 	var b strings.Builder
 
-	titleStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("15")).
-		MarginBottom(1)
-
-	progressStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("220"))
-
-	b.WriteString(titleStyle.Render("Querying Tagged Users"))
+	b.WriteString(TitleStyle.Render("Querying Tagged Users"))
 	b.WriteString("\n\n")
 
-	b.WriteString(progressStyle.Render(m.queryProgress))
+	b.WriteString(ProgressStyle.Render(m.queryProgress))
 	b.WriteString("\n\n")
 
 	b.WriteString(fmt.Sprintf("Completed: %d / %d", m.queryCompleted, m.queryTotal))
@@ -1474,12 +1490,11 @@ func (m TUIModel) renderQueryProgress() string {
 	}
 	b.WriteString("\n")
 
-	// Add border with minimum width to match main viewport
-	borderStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("196")).
+	// Add border with width from layout
+	borderStyle := BorderStyle.
 		Padding(1, 2).
-		Width(108)
+		Width(m.layout.ViewportWidth).
+		MarginTop(1)
 
 	return borderStyle.Render(b.String())
 }
@@ -1488,50 +1503,20 @@ func (m TUIModel) renderQueryProgress() string {
 func (m TUIModel) renderUserDetail() string {
 	var b strings.Builder
 
-	titleStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("15"))
-
-	loginStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("226")).
-		Bold(true)
-
-	tabActiveStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("15")).
-		Background(lipgloss.Color("88")).
-		Bold(true).
-		Padding(0, 2)
-
-	tabInactiveStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("15")).
-		Padding(0, 2)
-
-	selectedStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("15")).
-		Background(lipgloss.Color("88")).
-		Bold(true)
-
-	normalStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("15"))
-
-	hintStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("15")).
-		Italic(true)
-
 	// Header with tabs on same line
-	b.WriteString(titleStyle.Render("User: "))
-	b.WriteString(loginStyle.Render(m.selectedUserLogin))
+	b.WriteString(TitleStyle.Render("User: "))
+	b.WriteString(AccentStyle.Render(m.selectedUserLogin))
 	b.WriteString("    ") // spacing between username and tabs
 	if m.userDetailTab == 0 {
-		b.WriteString(tabActiveStyle.Render(fmt.Sprintf("Repos (%d)", len(m.userRepos))))
+		b.WriteString(TabActiveStyle.Render(fmt.Sprintf("Repos (%d)", len(m.userRepos))))
 	} else {
-		b.WriteString(tabInactiveStyle.Render(fmt.Sprintf("Repos (%d)", len(m.userRepos))))
+		b.WriteString(TabInactiveStyle.Render(fmt.Sprintf("Repos (%d)", len(m.userRepos))))
 	}
 	b.WriteString(" ")
 	if m.userDetailTab == 1 {
-		b.WriteString(tabActiveStyle.Render(fmt.Sprintf("Files (%d)", len(m.userGistFiles))))
+		b.WriteString(TabActiveStyle.Render(fmt.Sprintf("Files (%d)", len(m.userGistFiles))))
 	} else {
-		b.WriteString(tabInactiveStyle.Render(fmt.Sprintf("Files (%d)", len(m.userGistFiles))))
+		b.WriteString(TabInactiveStyle.Render(fmt.Sprintf("Files (%d)", len(m.userGistFiles))))
 	}
 	b.WriteString("\n\n")
 
@@ -1539,12 +1524,12 @@ func (m TUIModel) renderUserDetail() string {
 	if m.userDetailTab == 0 {
 		// Repos tab
 		if len(m.userRepos) == 0 {
-			b.WriteString(hintStyle.Render("No repositories found."))
+			b.WriteString(HintStyle.Render("No repositories found."))
 		} else {
 			// Show header
-			b.WriteString(normalStyle.Render(fmt.Sprintf("%-30s %-8s %-8s %-9s %-10s", "Name", "Stars", "Forks", "Commits", "Visibility")))
+			b.WriteString(NormalStyle.Render(fmt.Sprintf("%-30s %-8s %-8s %-9s %-10s", "Name", "Stars", "Forks", "Commits", "Visibility")))
 			b.WriteString("\n")
-			b.WriteString(normalStyle.Render(strings.Repeat("-", 70)))
+			b.WriteString(NormalStyle.Render(strings.Repeat("-", 70)))
 			b.WriteString("\n")
 
 			// Show repos (limited to 15 visible)
@@ -1565,9 +1550,9 @@ func (m TUIModel) renderUserDetail() string {
 				}
 				line := fmt.Sprintf("%-30s %-8d %-8d %-9d %-10s", name, repo.StargazerCount, repo.ForkCount, repo.CommitCount, repo.Visibility)
 				if i == m.userDetailCursor {
-					b.WriteString(selectedStyle.Render(line))
+					b.WriteString(SelectedStyle.Render(line))
 				} else {
-					b.WriteString(normalStyle.Render(line))
+					b.WriteString(NormalStyle.Render(line))
 				}
 				b.WriteString("\n")
 			}
@@ -1575,12 +1560,12 @@ func (m TUIModel) renderUserDetail() string {
 	} else {
 		// Gists tab - show files
 		if len(m.userGistFiles) == 0 {
-			b.WriteString(hintStyle.Render("No gist files found."))
+			b.WriteString(HintStyle.Render("No gist files found."))
 		} else {
 			// Show header
-			b.WriteString(normalStyle.Render(fmt.Sprintf("%-30s %-12s %-8s %-5s %-12s", "Filename", "Language", "Size", "Revs", "Updated")))
+			b.WriteString(NormalStyle.Render(fmt.Sprintf("%-30s %-12s %-8s %-5s %-12s", "Filename", "Language", "Size", "Revs", "Updated")))
 			b.WriteString("\n")
-			b.WriteString(normalStyle.Render(strings.Repeat("-", 70)))
+			b.WriteString(NormalStyle.Render(strings.Repeat("-", 70)))
 			b.WriteString("\n")
 
 			// Show files (limited to 15 visible)
@@ -1618,9 +1603,9 @@ func (m TUIModel) renderUserDetail() string {
 				}
 				line := fmt.Sprintf("%-30s %-12s %-8s %-5d %-12s", name, lang, sizeStr, file.RevisionCount, updated)
 				if i == m.userDetailCursor {
-					b.WriteString(selectedStyle.Render(line))
+					b.WriteString(SelectedStyle.Render(line))
 				} else {
-					b.WriteString(normalStyle.Render(line))
+					b.WriteString(NormalStyle.Render(line))
 				}
 				b.WriteString("\n")
 			}
@@ -1628,14 +1613,13 @@ func (m TUIModel) renderUserDetail() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(hintStyle.Render("left/right: switch tabs | j/k: navigate | Enter: open in browser | Esc: back"))
+	b.WriteString(HintStyle.Render("left/right: switch tabs | j/k: navigate | Enter: open in browser | Esc: back"))
 
-	// Add border with minimum width to match main viewport
-	borderStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("196")).
+	// Add border with width from layout
+	borderStyle := BorderStyle.
 		Padding(1, 2).
-		Width(108)
+		Width(m.layout.ViewportWidth).
+		MarginTop(1)
 
 	return borderStyle.Render(b.String())
 }
@@ -1644,33 +1628,18 @@ func (m TUIModel) renderUserDetail() string {
 func (m TUIModel) renderFetchProgress() string {
 	var b strings.Builder
 
-	titleStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("15")).
-		MarginBottom(1)
-
-	repoStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("226")).
-		Bold(true)
-
-	progressStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("220"))
-
-	b.WriteString(titleStyle.Render("Fetching Commits"))
+	b.WriteString(TitleStyle.Render("Fetching Commits"))
 	b.WriteString("\n\n")
 
 	b.WriteString("Repository: ")
-	b.WriteString(repoStyle.Render(fmt.Sprintf("%s/%s", m.fetchingRepo.Owner, m.fetchingRepo.Name)))
+	b.WriteString(AccentStyle.Render(fmt.Sprintf("%s/%s", m.fetchingRepo.Owner, m.fetchingRepo.Name)))
 	b.WriteString("\n\n")
 
-	b.WriteString(progressStyle.Render(m.fetchProgress))
+	b.WriteString(ProgressStyle.Render(m.fetchProgress))
 	b.WriteString("\n")
 
-	// Add border
-	borderStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("196")).
-		Padding(1, 2)
+	// Add border with width from layout
+	borderStyle := BorderStyle.Padding(1, 2).Width(m.layout.ViewportWidth).MarginTop(1)
 
 	return borderStyle.Render(b.String())
 }
@@ -1679,46 +1648,26 @@ func (m TUIModel) renderFetchProgress() string {
 func (m TUIModel) renderMenu() string {
 	var b strings.Builder
 
-	titleStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("15")).
-		MarginBottom(1)
+	menuSelectedStyle := SelectedStyle.Padding(0, 1)
+	menuNormalStyle := NormalStyle.Padding(0, 1)
 
-	selectedStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("15")).
-		Background(lipgloss.Color("88")).
-		Bold(true).
-		Padding(0, 1)
-
-	normalStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("15")).
-		Padding(0, 1)
-
-	hintStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("15")).
-		Italic(true).
-		MarginTop(1)
-
-	b.WriteString(titleStyle.Render("Menu"))
+	b.WriteString(TitleStyle.Render("Menu"))
 	b.WriteString("\n\n")
 
 	for i, option := range menuOptions {
 		if i == m.menuCursor {
-			b.WriteString(selectedStyle.Render("> " + option))
+			b.WriteString(menuSelectedStyle.Render("> " + option))
 		} else {
-			b.WriteString(normalStyle.Render("  " + option))
+			b.WriteString(menuNormalStyle.Render("  " + option))
 		}
 		b.WriteString("\n")
 	}
 
 	b.WriteString("\n")
-	b.WriteString(hintStyle.Render("Enter: select | Esc: close"))
+	b.WriteString(HintStyle.Render("Enter: select | Esc: close"))
 
-	// Add border around menu
-	borderStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("196")).
-		Padding(1, 2)
+	// Add border around menu with width from layout
+	borderStyle := BorderStyle.Padding(1, 2).Width(m.layout.ViewportWidth).MarginTop(1)
 
 	return borderStyle.Render(b.String())
 }
@@ -1727,38 +1676,20 @@ func (m TUIModel) renderMenu() string {
 func (m TUIModel) renderDomainConfig() string {
 	var b strings.Builder
 
-	titleStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("15")).
-		MarginBottom(1)
-
-	selectedStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("15")).
-		Background(lipgloss.Color("88")).
-		Bold(true)
-
-	hintStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("15")).
-		Italic(true)
-
-	inputStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("226")).
-		Bold(true)
-
-	b.WriteString(titleStyle.Render("Configure Highlight Domains"))
+	b.WriteString(TitleStyle.Render("Configure Highlight Domains"))
 	b.WriteString("\n\n")
 
 	if len(m.domainList) == 0 {
-		b.WriteString(hintStyle.Render("No domains configured. Press A to add one."))
+		b.WriteString(HintStyle.Render("No domains configured. Press A to add one."))
 		b.WriteString("\n")
 	} else {
 		for i, domain := range m.domainList {
-			domainStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("226")) // bright yellow
+			domainStyle := AccentStyle
 
 			prefix := "  "
 			if i == m.domainCursor {
 				prefix = "> "
-				domainStyle = selectedStyle
+				domainStyle = SelectedStyle
 			}
 
 			b.WriteString(prefix)
@@ -1771,20 +1702,17 @@ func (m TUIModel) renderDomainConfig() string {
 
 	// Show input field if active
 	if m.domainInputActive {
-		b.WriteString(inputStyle.Render("Add domain: "))
+		b.WriteString(AccentStyle.Render("Add domain: "))
 		b.WriteString(m.domainInput)
 		b.WriteString("_")
 		b.WriteString("\n\n")
-		b.WriteString(hintStyle.Render("Enter: save | Esc: cancel"))
+		b.WriteString(HintStyle.Render("Enter: save | Esc: cancel"))
 	} else {
-		b.WriteString(hintStyle.Render("A: add domain | D: delete selected | Esc: back"))
+		b.WriteString(HintStyle.Render("A: add domain | D: delete selected | Esc: back"))
 	}
 
-	// Add border around config screen
-	borderStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("196")).
-		Padding(1, 2)
+	// Add border around config screen with width from layout
+	borderStyle := BorderStyle.Padding(1, 2).Width(m.layout.ViewportWidth).MarginTop(1)
 
 	return borderStyle.Render(b.String())
 }
@@ -1851,8 +1779,8 @@ func (m TUIModel) renderTableWithLinks() string {
 		// Check if pending (yellow background)
 		if pendingEmails[email] {
 			style := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("0")).  // black text
-				Background(lipgloss.Color("220")) // yellow background
+				Foreground(ColorBlack).
+				Background(ColorAccentDim)
 			result[i] = style.Render(line)
 			continue
 		}
@@ -1869,13 +1797,13 @@ func (m TUIModel) renderTableWithLinks() string {
 		// Check if email domain matches a highlight domain
 		domain := extractDomain(email)
 		if _, ok := m.highlightDomains[domain]; ok {
-			style := lipgloss.NewStyle().Foreground(lipgloss.Color("226")) // bright yellow
+			style := lipgloss.NewStyle().Foreground(ColorAccent)
 			result[i] = style.Render(line)
 			continue
 		}
 
 		// Apply bright white to non-highlighted rows
-		style := lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
+		style := lipgloss.NewStyle().Foreground(ColorText)
 		result[i] = style.Render(line)
 	}
 
@@ -1911,7 +1839,7 @@ func RunInteractiveTable(
 
 	model := NewTUIModel(stats, links, tags, domains, repoOwner, repoName, database, tableType, totalCommits, cached)
 	model.token = token
-	p := tea.NewProgram(model)
+	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	_, err = p.Run()
 	return err
@@ -1965,7 +1893,7 @@ func RunMultiRepoTUI(
 	model.token = token
 	model.dbPath = dbPath
 
-	p := tea.NewProgram(model)
+	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	finalModel, err := p.Run()
 	if err != nil {

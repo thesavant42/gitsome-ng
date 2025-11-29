@@ -8,7 +8,6 @@ import (
 	"github.com/thesavant42/gitsome-ng/internal/db"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // ProjectResult represents the user's selection from the project selector
@@ -19,14 +18,14 @@ type ProjectResult struct {
 
 // ProjectSelectorModel handles project selection UI
 type ProjectSelectorModel struct {
-	projects       []string // list of .db files
-	cursor         int
-	createMode     bool   // true when creating new project
-	createInput    string // input for new project name
-	result         *ProjectResult
-	quitting       bool
-	width          int
-	height         int
+	projects    []string // list of .db files
+	cursor      int
+	createMode  bool   // true when creating new project
+	createInput string // input for new project name
+	result      *ProjectResult
+	quitting    bool
+	width       int
+	height      int
 }
 
 // NewProjectSelectorModel creates a new project selector
@@ -143,42 +142,22 @@ func (m ProjectSelectorModel) View() string {
 
 	var b strings.Builder
 
-	titleStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("15")).
-		MarginBottom(1)
+	// Use centralized styles from styles.go
+	menuSelectedStyle := SelectedStyle.Padding(0, 1)
+	menuNormalStyle := NormalStyle.Padding(0, 1)
 
-	selectedStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("15")).
-		Background(lipgloss.Color("88")).
-		Bold(true).
-		Padding(0, 1)
-
-	normalStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("15")).
-		Padding(0, 1)
-
-	hintStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("15")).
-		Italic(true).
-		MarginTop(1)
-
-	inputStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("226")).
-		Bold(true)
-
-	b.WriteString(titleStyle.Render("Select Project"))
+	b.WriteString(TitleStyle.Render("Select Project"))
 	b.WriteString("\n\n")
 
 	if m.createMode {
 		b.WriteString("Enter project name:\n\n")
-		b.WriteString(inputStyle.Render(m.createInput + "_"))
+		b.WriteString(AccentStyle.Render(m.createInput + "_"))
 		b.WriteString("\n\n")
-		b.WriteString(hintStyle.Render("Press Enter to create, Esc to cancel"))
+		b.WriteString(HintStyle.Render("Press Enter to create, Esc to cancel"))
 	} else {
 		// List existing projects
 		if len(m.projects) == 0 {
-			b.WriteString(hintStyle.Render("No existing projects found"))
+			b.WriteString(HintStyle.Render("No existing projects found"))
 			b.WriteString("\n\n")
 		} else {
 			for i, proj := range m.projects {
@@ -186,9 +165,9 @@ func (m ProjectSelectorModel) View() string {
 				displayName := strings.TrimSuffix(proj, filepath.Ext(proj))
 				line := fmt.Sprintf("  %s", displayName)
 				if i == m.cursor {
-					b.WriteString(selectedStyle.Render(line))
+					b.WriteString(menuSelectedStyle.Render(line))
 				} else {
-					b.WriteString(normalStyle.Render(line))
+					b.WriteString(menuNormalStyle.Render(line))
 				}
 				b.WriteString("\n")
 			}
@@ -198,28 +177,27 @@ func (m ProjectSelectorModel) View() string {
 		// Create New option
 		createLine := "  + Create New Project"
 		if m.cursor == len(m.projects) {
-			b.WriteString(selectedStyle.Render(createLine))
+			b.WriteString(menuSelectedStyle.Render(createLine))
 		} else {
-			b.WriteString(normalStyle.Render(createLine))
+			b.WriteString(menuNormalStyle.Render(createLine))
 		}
 		b.WriteString("\n")
 
 		// Exit option
 		exitLine := "  Exit"
 		if m.cursor == len(m.projects)+1 {
-			b.WriteString(selectedStyle.Render(exitLine))
+			b.WriteString(menuSelectedStyle.Render(exitLine))
 		} else {
-			b.WriteString(normalStyle.Render(exitLine))
+			b.WriteString(menuNormalStyle.Render(exitLine))
 		}
 		b.WriteString("\n\n")
 
-		b.WriteString(hintStyle.Render("Use j/k or arrows to navigate, Enter to select, q to quit"))
+		b.WriteString(HintStyle.Render("Use j/k or arrows to navigate, Enter to select, q to quit"))
 	}
 
-	borderStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("196")).
-		Padding(1, 2)
+	// Use centralized border style with dynamic width from terminal and top margin
+	layout := NewLayout(m.width)
+	borderStyle := BorderStyle.Padding(1, 2).Width(layout.ViewportWidth).MarginTop(1)
 
 	return borderStyle.Render(b.String())
 }
@@ -255,8 +233,8 @@ func RunProjectSelector() (*ProjectResult, error) {
 	}
 
 	model := NewProjectSelectorModel(projects)
-	p := tea.NewProgram(model)
-	
+	p := tea.NewProgram(model, tea.WithAltScreen())
+
 	finalModel, err := p.Run()
 	if err != nil {
 		return nil, fmt.Errorf("project selector failed: %w", err)
@@ -268,4 +246,3 @@ func RunProjectSelector() (*ProjectResult, error) {
 	}
 	return result, nil
 }
-

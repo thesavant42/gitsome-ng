@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/thesavant42/gitsome-ng/internal/models"
 )
@@ -23,11 +24,13 @@ type Client struct {
 	token      string // Optional: for authenticated requests (higher rate limits)
 }
 
-// NewClient creates a new GitHub API client
+// NewClient creates a new GitHub API client with a 30 second timeout
 func NewClient(token string) *Client {
 	return &Client{
-		httpClient: &http.Client{},
-		token:      token,
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+		token: token,
 	}
 }
 
