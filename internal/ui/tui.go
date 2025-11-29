@@ -79,6 +79,7 @@ var menuOptions = []string{
 	"Switch Project",
 	"Export Tab to Markdown",
 	"Export Database Backup",
+	"Export Project Report",
 }
 
 // gistFileEntry represents a flattened view of a gist file with parent gist info
@@ -666,6 +667,18 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			} else {
 				m.exportMessage = "Database path not available"
+			}
+		case 6: // Export Project Report
+			m.menuVisible = false
+			if m.database != nil {
+				filename, err := ExportProjectReport(m.database, m.dbPath)
+				if err != nil {
+					m.exportMessage = fmt.Sprintf("Project report failed: %v", err)
+				} else {
+					m.exportMessage = fmt.Sprintf("Project report exported to %s", filename)
+				}
+			} else {
+				m.exportMessage = "Database not available"
 			}
 		}
 		return m, nil

@@ -8,8 +8,11 @@ GitHub commit analyzer with an interactive TUI for tracking committers across mu
 - View commit statistics with committer breakdown
 - Interactive terminal UI with keyboard navigation
 - Highlight email domains with custom colors
-- Add links and tags to committers
+- Tag committers and query their GitHub repos/gists
+- User detail view showing repositories and gists
+- Open repos/gists directly in browser
 - Export data to Markdown with clickable GitHub profile links
+- Export comprehensive project reports
 - Database backup/export functionality
 - Project management (create, switch, backup projects)
 
@@ -21,8 +24,6 @@ GitHub commit analyzer with an interactive TUI for tracking committers across mu
 go install github.com/thesavant42/gitsome-ng/cmd/yolosint@latest
 ```
 
-After installation, `yolosint` will be available in your PATH.
-
 ### Build Locally
 
 ```bash
@@ -33,58 +34,25 @@ go build -o yolosint ./cmd/yolosint
 
 ## Authentication
 
-yolosint requires a GitHub Personal Access Token (PAT) to fetch commit data.
-
-### Setting up your GitHub Token
-
-**On Windows (PowerShell):**
-```powershell
-$env:GITHUB_TOKEN="your_token_here"
-```
-
-**On Windows (Command Prompt):**
-```cmd
-set GITHUB_TOKEN=your_token_here
-```
-
-**On Linux/macOS:**
-```bash
-export GITHUB_TOKEN="your_token_here"
-```
-
-Alternatively, create a `.env` file in your working directory:
-```
-GITHUB_TOKEN=your_token_here
-```
+Requires `GITHUB_TOKEN` environment variable set to a GitHub Personal Access Token.
 
 ## Usage
 
 ### Interactive Mode (Recommended)
 
-Simply run:
 ```bash
 yolosint
 ```
 
-This launches the project selector where you can:
-- Open an existing project database
-- Create a new project
-- Exit
+This launches the project selector where you can open existing projects, create new ones, or exit.
 
 ### Command Line Flags
 
 ```bash
-# Use a specific database file
-yolosint --db myproject.db
-
-# Add a repository to tracking
-yolosint --add-repo owner/repo
-
-# List tracked repositories
-yolosint --list-repos
-
-# Legacy single-repo mode
-yolosint owner/repo
+yolosint --db myproject.db    # Use specific database
+yolosint --add-repo owner/repo # Add repository
+yolosint --list-repos          # List tracked repos
+yolosint owner/repo            # Legacy single-repo mode
 ```
 
 ## Keyboard Controls
@@ -92,28 +60,34 @@ yolosint owner/repo
 | Key | Action |
 |-----|--------|
 | Up/Down | Navigate rows |
-| Left/Right | Switch between repositories |
-| Enter | Open menu |
+| Left/Right | Switch repositories / tabs |
+| Enter | Open menu / detail view / browser |
+| t/T | Tag/untag committer |
+| Tab | Switch tabs in detail view |
+| Esc | Return from detail view |
 | q | Quit |
 
-### Menu Options
+## Menu Options
 
-- **Add Repository** - Track a new GitHub repository
-- **Switch Project** - Open a different database file
-- **Export Tab to Markdown** - Save current view as Markdown
-- **Export Database Backup** - Copy database file
-- **Highlight Domain** - Color-code email domains
-- **Add Link/Tag** - Annotate committers
-- **Quit** - Exit application
+1. **Configure Highlight Domains** - Color-code email domains
+2. **Add Repository** - Track a new GitHub repository
+3. **Query Tagged Users** - Fetch repos/gists for tagged users
+4. **Switch Project** - Open a different database
+5. **Export Tab to Markdown** - Save current view as Markdown
+6. **Export Database Backup** - Copy database file
+7. **Export Project Report** - Full project report with all data
+
+## Tagging and Scanning
+
+1. Navigate to a committer and press `t` to tag them `[x]`
+2. Open menu and select "Query Tagged Users"
+3. Tagged users are scanned and marked `[!]` when complete
+4. Press Enter on a scanned user to view their repos/gists
+5. Press Enter on a repo/gist row to open it in browser
 
 ## Data Storage
 
-Project databases (`.db` files) are created in your current working directory. Each project maintains:
-- Tracked repositories
-- Commit history
-- Committer statistics
-- Email domain highlights
-- Links and tags
+Project databases (`.db` files) are created in your current working directory.
 
 ## Legacy Python Version
 
