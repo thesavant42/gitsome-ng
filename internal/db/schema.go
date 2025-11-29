@@ -227,6 +227,7 @@ CREATE TABLE IF NOT EXISTS user_repositories (
     disk_usage INTEGER,
     stargazer_count INTEGER,
     fork_count INTEGER,
+    commit_count INTEGER,
     is_fork BOOLEAN,
     is_empty BOOLEAN,
     is_in_organization BOOLEAN,
@@ -254,6 +255,7 @@ CREATE TABLE IF NOT EXISTS user_gists (
     is_public BOOLEAN,
     is_fork BOOLEAN,
     stargazer_count INTEGER,
+    revision_count INTEGER,
     created_at TEXT,
     updated_at TEXT,
     pushed_at TEXT,
@@ -302,14 +304,14 @@ CREATE INDEX IF NOT EXISTS idx_gist_comments_gist ON gist_comments(gist_id);
 const insertUserRepository = `
 INSERT OR REPLACE INTO user_repositories (
     github_login, name, owner_login, description, url, ssh_url, homepage_url,
-    disk_usage, stargazer_count, fork_count, is_fork, is_empty, is_in_organization,
+    disk_usage, stargazer_count, fork_count, commit_count, is_fork, is_empty, is_in_organization,
     has_wiki_enabled, visibility, created_at, updated_at, pushed_at, fetched_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 `
 
 const selectUserRepositories = `
 SELECT id, github_login, name, owner_login, description, url, ssh_url, homepage_url,
-       disk_usage, stargazer_count, fork_count, is_fork, is_empty, is_in_organization,
+       disk_usage, stargazer_count, fork_count, commit_count, is_fork, is_empty, is_in_organization,
        has_wiki_enabled, visibility, created_at, updated_at, pushed_at, fetched_at
 FROM user_repositories
 WHERE github_login = ?
@@ -328,13 +330,13 @@ DELETE FROM user_repositories WHERE github_login = ?
 const insertUserGist = `
 INSERT OR REPLACE INTO user_gists (
     id, github_login, name, description, url, resource_path,
-    is_public, is_fork, stargazer_count, created_at, updated_at, pushed_at, fetched_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    is_public, is_fork, stargazer_count, revision_count, created_at, updated_at, pushed_at, fetched_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 `
 
 const selectUserGists = `
 SELECT id, github_login, name, description, url, resource_path,
-       is_public, is_fork, stargazer_count, created_at, updated_at, pushed_at, fetched_at
+       is_public, is_fork, stargazer_count, revision_count, created_at, updated_at, pushed_at, fetched_at
 FROM user_gists
 WHERE github_login = ?
 ORDER BY created_at DESC

@@ -86,6 +86,16 @@ func New(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("failed to create gist comments schema: %w", err)
 	}
 
+	// Run migrations to add new columns to existing tables
+	// These will silently fail if columns already exist
+	migrations := []string{
+		"ALTER TABLE user_repositories ADD COLUMN commit_count INTEGER DEFAULT 0",
+		"ALTER TABLE user_gists ADD COLUMN revision_count INTEGER DEFAULT 0",
+	}
+	for _, migration := range migrations {
+		conn.Exec(migration) // Ignore errors - column may already exist
+	}
+
 	return &DB{conn: conn}, nil
 }
 
@@ -504,7 +514,7 @@ func (db *DB) SaveUserRepositories(repos []models.UserRepository) error {
 		_, err := stmt.Exec(
 			repo.GitHubLogin, repo.Name, repo.OwnerLogin, repo.Description,
 			repo.URL, repo.SSHURL, repo.HomepageURL, repo.DiskUsage,
-			repo.StargazerCount, repo.ForkCount, repo.IsFork, repo.IsEmpty,
+			repo.StargazerCount, repo.ForkCount, repo.CommitCount, repo.IsFork, repo.IsEmpty,
 			repo.IsInOrganization, repo.HasWikiEnabled, repo.Visibility,
 			repo.CreatedAt, repo.UpdatedAt, repo.PushedAt,
 		)
@@ -534,7 +544,7 @@ func (db *DB) GetUserRepositories(githubLogin string) ([]models.UserRepository, 
 		if err := rows.Scan(
 			&r.ID, &r.GitHubLogin, &r.Name, &r.OwnerLogin, &r.Description,
 			&r.URL, &r.SSHURL, &r.HomepageURL, &r.DiskUsage,
-			&r.StargazerCount, &r.ForkCount, &r.IsFork, &r.IsEmpty,
+			&r.StargazerCount, &r.ForkCount, &r.CommitCount, &r.IsFork, &r.IsEmpty,
 			&r.IsInOrganization, &r.HasWikiEnabled, &r.Visibility,
 			&r.CreatedAt, &r.UpdatedAt, &r.PushedAt, &fetchedAt,
 		); err != nil {
@@ -608,7 +618,7 @@ func (db *DB) SaveUserGists(gists []models.UserGist) error {
 		_, err := gistStmt.Exec(
 			gist.ID, gist.GitHubLogin, gist.Name, gist.Description,
 			gist.URL, gist.ResourcePath, gist.IsPublic, gist.IsFork,
-			gist.StargazerCount, gist.CreatedAt, gist.UpdatedAt, gist.PushedAt,
+			gist.StargazerCount, gist.RevisionCount, gist.CreatedAt, gist.UpdatedAt, gist.PushedAt,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to save gist %s: %w", gist.ID, err)
@@ -658,7 +668,7 @@ func (db *DB) GetUserGists(githubLogin string) ([]models.UserGist, error) {
 		if err := rows.Scan(
 			&g.ID, &g.GitHubLogin, &g.Name, &g.Description,
 			&g.URL, &g.ResourcePath, &g.IsPublic, &g.IsFork,
-			&g.StargazerCount, &g.CreatedAt, &g.UpdatedAt, &g.PushedAt, &fetchedAt,
+			&g.StargazerCount, &g.RevisionCount, &g.CreatedAt, &g.UpdatedAt, &g.PushedAt, &fetchedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan user gist: %w", err)
 		}

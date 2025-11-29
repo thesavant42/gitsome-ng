@@ -2,6 +2,8 @@ package ui
 
 import (
 	"fmt"
+	"os/exec"
+	"runtime"
 	"strings"
 
 	"github.com/thesavant42/gitsome-ng/internal/api"
@@ -79,6 +81,17 @@ var menuOptions = []string{
 	"Export Database Backup",
 }
 
+// gistFileEntry represents a flattened view of a gist file with parent gist info
+type gistFileEntry struct {
+	GistURL       string
+	GistID        string
+	FileName      string
+	Language      string
+	Size          int
+	RevisionCount int
+	UpdatedAt     string
+}
+
 // TUIModel holds the state for the interactive table
 type TUIModel struct {
 	table        table.Model
@@ -139,12 +152,13 @@ type TUIModel struct {
 	queryLoginsToFetch []string // logins remaining to fetch
 
 	// User detail view state
-	userDetailVisible bool                    // showing user detail view
-	selectedUserLogin string                  // which user we're viewing
-	userRepos         []models.UserRepository // repos for selected user
-	userGists         []models.UserGist       // gists for selected user
-	userDetailTab     int                     // 0 = repos, 1 = gists
-	userDetailCursor  int                     // cursor position in detail view
+	userDetailVisible  bool                    // showing user detail view
+	selectedUserLogin  string                  // which user we're viewing
+	userRepos          []models.UserRepository // repos for selected user
+	userGists          []models.UserGist       // gists for selected user
+	userGistFiles      []gistFileEntry         // flattened gist files for display
+	userDetailTab      int                     // 0 = repos, 1 = gists/files
+	userDetailCursor   int                     // cursor position in detail view
 
 	// Processed users cache - logins with fetched data show [!] instead of [x]
 	processedLogins map[string]bool
@@ -263,7 +277,7 @@ func NewTUIModel(
 
 // Init implements tea.Model
 func (m TUIModel) Init() tea.Cmd {
-	return nil
+	return tea.ClearScreen
 }
 
 // Update implements tea.Model
@@ -492,16 +506,33 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "t", "T":
-			// Toggle tag
+			// Toggle tag / clear processed status
 			cursor := m.table.Cursor()
 			if cursor >= 0 && cursor < len(m.stats) {
 				email := m.stats[cursor].Email
-				if m.tags[email] {
+				login := m.stats[cursor].GitHubLogin
+
+				// If user is processed [!], pressing T clears their data for re-scan
+				if login != "" && m.processedLogins[login] {
+					// Clear processed status and user data
+					delete(m.processedLogins, login)
+					if m.database != nil {
+						m.database.DeleteUserRepositories(login)
+						m.database.DeleteUserGists(login)
+					}
+					// Keep them tagged [x] so they can be re-scanned
+					m.tags[email] = true
+					if m.database != nil {
+						m.database.SaveTag(m.repoOwner, m.repoName, email)
+					}
+				} else if m.tags[email] {
+					// Currently tagged [x] -> untag [ ]
 					delete(m.tags, email)
 					if m.database != nil {
 						m.database.RemoveTag(m.repoOwner, m.repoName, email)
 					}
 				} else {
+					// Currently untagged [ ] -> tag [x]
 					m.tags[email] = true
 					if m.database != nil {
 						m.database.SaveTag(m.repoOwner, m.repoName, email)
@@ -1029,10 +1060,25 @@ func (m TUIModel) handleUserDetailView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.userDetailTab == 0 {
 			maxItems = len(m.userRepos)
 		} else {
-			maxItems = len(m.userGists)
+			maxItems = len(m.userGistFiles)
 		}
 		if m.userDetailCursor < maxItems-1 {
 			m.userDetailCursor++
+		}
+		return m, nil
+
+	case "enter":
+		// Open selected repo or gist in browser
+		if m.userDetailTab == 0 && m.userDetailCursor < len(m.userRepos) {
+			repo := m.userRepos[m.userDetailCursor]
+			if repo.URL != "" {
+				openURL(repo.URL)
+			}
+		} else if m.userDetailTab == 1 && m.userDetailCursor < len(m.userGistFiles) {
+			file := m.userGistFiles[m.userDetailCursor]
+			if file.GistURL != "" {
+				openURL(file.GistURL)
+			}
 		}
 		return m, nil
 	}
@@ -1058,9 +1104,40 @@ func (m *TUIModel) showUserDetail(login string) {
 		gists = []models.UserGist{}
 	}
 
+	// Build flattened list of gist files
+	var gistFiles []gistFileEntry
+	for _, gist := range gists {
+		files, err := m.database.GetGistFiles(gist.ID)
+		if err != nil || len(files) == 0 {
+			// Show gist with no files as a placeholder entry
+			gistFiles = append(gistFiles, gistFileEntry{
+				GistURL:       gist.URL,
+				GistID:        gist.ID,
+				FileName:      "(no files)",
+				Language:      "-",
+				Size:          0,
+				RevisionCount: gist.RevisionCount,
+				UpdatedAt:     gist.UpdatedAt,
+			})
+		} else {
+			for _, file := range files {
+				gistFiles = append(gistFiles, gistFileEntry{
+					GistURL:       gist.URL,
+					GistID:        gist.ID,
+					FileName:      file.Name,
+					Language:      file.Language,
+					Size:          file.Size,
+					RevisionCount: gist.RevisionCount,
+					UpdatedAt:     gist.UpdatedAt,
+				})
+			}
+		}
+	}
+
 	m.selectedUserLogin = login
 	m.userRepos = repos
 	m.userGists = gists
+	m.userGistFiles = gistFiles
 	m.userDetailTab = 0
 	m.userDetailCursor = 0
 	m.userDetailVisible = true
@@ -1167,12 +1244,12 @@ Keyboard Controls:
   L              Select/deselect row for linking (yellow = pending)
   Esc            Commit selected rows as a link group
   U              Unlink current row from its group
-  T              Toggle tag on current row
+  T              Toggle tag [ ]/[x], or clear [!] for re-scan
   M              Open menu
   ?              Toggle this help
   q              Quit
 
-Linking workflow: Press L on multiple rows to select them, then Esc to link.
+Tags: [ ]=untagged, [x]=tagged, [!]=scanned (press T to clear for re-scan)
 `
 		b.WriteString(helpStyle.Render(help))
 	} else {
@@ -1186,7 +1263,7 @@ Linking workflow: Press L on multiple rows to select them, then Esc to link.
 			leftPart += fmt.Sprintf(" [SELECTING: %d rows]", len(m.pendingLinks))
 		}
 
-		centerPart := "  Press ? for help, q to quit"
+		centerPart := "Press ? for help, q to quit"
 		if m.cached {
 			cachedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("226")).Bold(true)
 			centerPart += " | " + cachedStyle.Render("CACHED")
@@ -1198,8 +1275,9 @@ Linking workflow: Press L on multiple rows to select them, then Esc to link.
 
 		rightPart := fmt.Sprintf("Total Commits: %d", m.totalCommits)
 
-		// Calculate spacing (table is roughly 110 chars wide with border)
-		tableWidth := 112
+		// Calculate spacing (table is roughly 108 chars wide inside border)
+		// Account for 2-char left padding to align with table border
+		tableWidth := 108
 		usedWidth := len(leftPart) + len(centerPart) + len(rightPart)
 		remainingSpace := tableWidth - usedWidth
 		if remainingSpace < 4 {
@@ -1208,7 +1286,8 @@ Linking workflow: Press L on multiple rows to select them, then Esc to link.
 		leftSpacing := remainingSpace / 2
 		rightSpacing := remainingSpace - leftSpacing
 
-		footer := statsStyle.Render(leftPart) +
+		// Add left padding to align with table border
+		footer := "  " + statsStyle.Render(leftPart) +
 			strings.Repeat(" ", leftSpacing) +
 			hintStyle.Render(centerPart) +
 			strings.Repeat(" ", rightSpacing) +
@@ -1240,6 +1319,9 @@ func (m TUIModel) renderPageIndicator() string {
 	arrowStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("196")).
 		Bold(true)
+
+	// Add left padding to align with table border (2 spaces for border + padding)
+	b.WriteString("  ")
 
 	// Left arrow
 	if m.currentRepoIndex > 0 || m.showCombined {
@@ -1423,12 +1505,10 @@ func (m TUIModel) renderUserDetail() string {
 		Foreground(lipgloss.Color("15")).
 		Italic(true)
 
-	// Header
+	// Header with tabs on same line
 	b.WriteString(titleStyle.Render("User: "))
 	b.WriteString(loginStyle.Render(m.selectedUserLogin))
-	b.WriteString("\n\n")
-
-	// Tabs
+	b.WriteString("    ") // spacing between username and tabs
 	if m.userDetailTab == 0 {
 		b.WriteString(tabActiveStyle.Render(fmt.Sprintf("Repos (%d)", len(m.userRepos))))
 	} else {
@@ -1436,9 +1516,9 @@ func (m TUIModel) renderUserDetail() string {
 	}
 	b.WriteString(" ")
 	if m.userDetailTab == 1 {
-		b.WriteString(tabActiveStyle.Render(fmt.Sprintf("Gists (%d)", len(m.userGists))))
+		b.WriteString(tabActiveStyle.Render(fmt.Sprintf("Files (%d)", len(m.userGistFiles))))
 	} else {
-		b.WriteString(tabInactiveStyle.Render(fmt.Sprintf("Gists (%d)", len(m.userGists))))
+		b.WriteString(tabInactiveStyle.Render(fmt.Sprintf("Files (%d)", len(m.userGistFiles))))
 	}
 	b.WriteString("\n\n")
 
@@ -1449,9 +1529,9 @@ func (m TUIModel) renderUserDetail() string {
 			b.WriteString(hintStyle.Render("No repositories found."))
 		} else {
 			// Show header
-			b.WriteString(normalStyle.Render(fmt.Sprintf("%-30s %-8s %-8s %-10s", "Name", "Stars", "Forks", "Visibility")))
+			b.WriteString(normalStyle.Render(fmt.Sprintf("%-30s %-8s %-8s %-9s %-10s", "Name", "Stars", "Forks", "Commits", "Visibility")))
 			b.WriteString("\n")
-			b.WriteString(normalStyle.Render(strings.Repeat("-", 60)))
+			b.WriteString(normalStyle.Render(strings.Repeat("-", 70)))
 			b.WriteString("\n")
 
 			// Show repos (limited to 15 visible)
@@ -1470,7 +1550,7 @@ func (m TUIModel) renderUserDetail() string {
 				if len(name) > 28 {
 					name = name[:25] + "..."
 				}
-				line := fmt.Sprintf("%-30s %-8d %-8d %-10s", name, repo.StargazerCount, repo.ForkCount, repo.Visibility)
+				line := fmt.Sprintf("%-30s %-8d %-8d %-9d %-10s", name, repo.StargazerCount, repo.ForkCount, repo.CommitCount, repo.Visibility)
 				if i == m.userDetailCursor {
 					b.WriteString(selectedStyle.Render(line))
 				} else {
@@ -1480,40 +1560,50 @@ func (m TUIModel) renderUserDetail() string {
 			}
 		}
 	} else {
-		// Gists tab
-		if len(m.userGists) == 0 {
-			b.WriteString(hintStyle.Render("No gists found."))
+		// Gists tab - show files
+		if len(m.userGistFiles) == 0 {
+			b.WriteString(hintStyle.Render("No gist files found."))
 		} else {
 			// Show header
-			b.WriteString(normalStyle.Render(fmt.Sprintf("%-40s %-8s %-8s", "Description", "Stars", "Public")))
+			b.WriteString(normalStyle.Render(fmt.Sprintf("%-30s %-12s %-8s %-5s %-12s", "Filename", "Language", "Size", "Revs", "Updated")))
 			b.WriteString("\n")
-			b.WriteString(normalStyle.Render(strings.Repeat("-", 60)))
+			b.WriteString(normalStyle.Render(strings.Repeat("-", 70)))
 			b.WriteString("\n")
 
-			// Show gists (limited to 15 visible)
+			// Show files (limited to 15 visible)
 			startIdx := 0
 			if m.userDetailCursor >= 15 {
 				startIdx = m.userDetailCursor - 14
 			}
 			endIdx := startIdx + 15
-			if endIdx > len(m.userGists) {
-				endIdx = len(m.userGists)
+			if endIdx > len(m.userGistFiles) {
+				endIdx = len(m.userGistFiles)
 			}
 
 			for i := startIdx; i < endIdx; i++ {
-				gist := m.userGists[i]
-				desc := gist.Description
-				if desc == "" {
-					desc = gist.Name
+				file := m.userGistFiles[i]
+				name := file.FileName
+				if len(name) > 28 {
+					name = name[:25] + "..."
 				}
-				if len(desc) > 38 {
-					desc = desc[:35] + "..."
+				lang := file.Language
+				if lang == "" {
+					lang = "-"
 				}
-				publicStr := "No"
-				if gist.IsPublic {
-					publicStr = "Yes"
+				if len(lang) > 10 {
+					lang = lang[:10]
 				}
-				line := fmt.Sprintf("%-40s %-8d %-8s", desc, gist.StargazerCount, publicStr)
+				// Format size
+				sizeStr := fmt.Sprintf("%dB", file.Size)
+				if file.Size >= 1024 {
+					sizeStr = fmt.Sprintf("%.1fKB", float64(file.Size)/1024)
+				}
+				// Format date (just show date part)
+				updated := file.UpdatedAt
+				if len(updated) > 10 {
+					updated = updated[:10]
+				}
+				line := fmt.Sprintf("%-30s %-12s %-8s %-5d %-12s", name, lang, sizeStr, file.RevisionCount, updated)
 				if i == m.userDetailCursor {
 					b.WriteString(selectedStyle.Render(line))
 				} else {
@@ -1525,7 +1615,7 @@ func (m TUIModel) renderUserDetail() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(hintStyle.Render("left/right: switch tabs | j/k: navigate | Esc: back"))
+	b.WriteString(hintStyle.Render("left/right: switch tabs | j/k: navigate | Enter: open in browser | Esc: back"))
 
 	// Add border with minimum width to match main viewport
 	borderStyle := lipgloss.NewStyle().
@@ -1874,4 +1964,18 @@ func RunMultiRepoTUI(
 		return true, nil
 	}
 	return false, nil
+}
+
+// openURL opens a URL in the default browser (cross-platform)
+func openURL(url string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("cmd", "/c", "start", url)
+	case "darwin":
+		cmd = exec.Command("open", url)
+	default: // linux, freebsd, etc.
+		cmd = exec.Command("xdg-open", url)
+	}
+	return cmd.Start()
 }

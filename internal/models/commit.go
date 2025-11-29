@@ -114,6 +114,7 @@ type UserRepository struct {
 	DiskUsage        int
 	StargazerCount   int
 	ForkCount        int
+	CommitCount      int // Total commits on default branch
 	IsFork           bool
 	IsEmpty          bool
 	IsInOrganization bool
@@ -136,6 +137,7 @@ type UserGist struct {
 	IsPublic       bool
 	IsFork         bool
 	StargazerCount int
+	RevisionCount  int // Number of revisions/versions
 	CreatedAt      string
 	UpdatedAt      string
 	PushedAt       string

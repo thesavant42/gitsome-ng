@@ -300,6 +300,13 @@ type graphQLRepo struct {
 	CreatedAt        string `json:"createdAt"`
 	UpdatedAt        string `json:"updatedAt"`
 	PushedAt         string `json:"pushedAt"`
+	DefaultBranchRef *struct {
+		Target struct {
+			History *struct {
+				TotalCount int `json:"totalCount"`
+			} `json:"history"`
+		} `json:"target"`
+	} `json:"defaultBranchRef"`
 }
 
 type graphQLGist struct {
@@ -314,6 +321,9 @@ type graphQLGist struct {
 	CreatedAt      string `json:"createdAt"`
 	UpdatedAt      string `json:"updatedAt"`
 	PushedAt       string `json:"pushedAt"`
+	History        struct {
+		TotalCount int `json:"totalCount"`
+	} `json:"history"`
 	Files          []graphQLGistFile `json:"files"`
 	Comments       struct {
 		Nodes []graphQLGistComment `json:"nodes"`
@@ -366,6 +376,10 @@ func parseUserDataResponse(body []byte, login string) (*models.UserData, error) 
 
 	// Convert repositories
 	for _, repo := range user.Repositories.Nodes {
+		commitCount := 0
+		if repo.DefaultBranchRef != nil && repo.DefaultBranchRef.Target.History != nil {
+			commitCount = repo.DefaultBranchRef.Target.History.TotalCount
+		}
 		userData.Repositories = append(userData.Repositories, models.UserRepository{
 			GitHubLogin:      login,
 			Name:             repo.Name,
@@ -377,6 +391,7 @@ func parseUserDataResponse(body []byte, login string) (*models.UserData, error) 
 			DiskUsage:        repo.DiskUsage,
 			StargazerCount:   repo.StargazerCount,
 			ForkCount:        repo.ForkCount,
+			CommitCount:      commitCount,
 			IsFork:           repo.IsFork,
 			IsEmpty:          repo.IsEmpty,
 			IsInOrganization: repo.IsInOrganization,
@@ -400,6 +415,7 @@ func parseUserDataResponse(body []byte, login string) (*models.UserData, error) 
 			IsPublic:       gist.IsPublic,
 			IsFork:         gist.IsFork,
 			StargazerCount: gist.StargazerCount,
+			RevisionCount:  gist.History.TotalCount,
 			CreatedAt:      gist.CreatedAt,
 			UpdatedAt:      gist.UpdatedAt,
 			PushedAt:       gist.PushedAt,
