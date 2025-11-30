@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/thesavant42/gitsome-ng/internal/models"
@@ -1067,5 +1068,183 @@ func (db *DB) GetAPILogsByLogin(login string, limit int) ([]map[string]interface
 		logs = append(logs, log)
 	}
 	return logs, nil
+}
+
+// SearchUsersWithDocker returns committers who have valid Docker Hub profiles
+// It joins user_profiles with commits to find users with actual Docker Hub accounts
+// Excludes: "None" (not found), "Error" (check failed), "Not found" (legacy)
+func (db *DB) SearchUsersWithDocker() ([]models.ContributorStats, int, error) {
+	query := `
+		SELECT DISTINCT 
+			c.committer_name,
+			c.committer_email,
+			COALESCE(c.github_committer_login, '') as github_login,
+			COUNT(*) as commit_count
+		FROM commits c
+		JOIN user_profiles p ON c.github_committer_login = p.login
+		WHERE p.social_accounts IS NOT NULL 
+			AND p.social_accounts != ''
+			AND p.social_accounts != '[]'
+			AND p.social_accounts LIKE '%DOCKERHUB%'
+			AND p.social_accounts NOT LIKE '%"displayName":"None"%'
+			AND p.social_accounts NOT LIKE '%"displayName":"Not found"%'
+			AND p.social_accounts NOT LIKE '%"displayName":"Error"%'
+		GROUP BY c.committer_email
+		ORDER BY commit_count DESC
+	`
+	rows, err := db.conn.Query(query)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to search users with docker: %w", err)
+	}
+	defer rows.Close()
+
+	var stats []models.ContributorStats
+	totalCommits := 0
+	for rows.Next() {
+		var s models.ContributorStats
+		if err := rows.Scan(&s.Name, &s.Email, &s.GitHubLogin, &s.CommitCount); err != nil {
+			return nil, 0, fmt.Errorf("failed to scan docker user: %w", err)
+		}
+		totalCommits += s.CommitCount
+		stats = append(stats, s)
+	}
+
+	// Calculate percentages
+	for i := range stats {
+		if totalCommits > 0 {
+			stats[i].Percentage = float64(stats[i].CommitCount) / float64(totalCommits) * 100
+		}
+	}
+
+	return stats, totalCommits, nil
+}
+
+// SearchUsersByDomains returns committers whose email domain matches any in the highlight_domains table
+func (db *DB) SearchUsersByDomains() ([]models.ContributorStats, int, error) {
+	// First get all highlight domains
+	domains, err := db.GetDomains()
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to get domains: %w", err)
+	}
+
+	if len(domains) == 0 {
+		return []models.ContributorStats{}, 0, nil
+	}
+
+	// Build domain match conditions using LIKE for each domain
+	// Email format is user@domain, so we match '%@domain'
+	var conditions []string
+	var args []interface{}
+	for domain := range domains {
+		conditions = append(conditions, "c.committer_email LIKE ?")
+		args = append(args, "%@"+domain)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT 
+			c.committer_name,
+			c.committer_email,
+			COALESCE(c.github_committer_login, '') as github_login,
+			COUNT(*) as commit_count
+		FROM commits c
+		WHERE %s
+		GROUP BY c.committer_email
+		ORDER BY commit_count DESC
+	`, strings.Join(conditions, " OR "))
+
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to search users by domains: %w", err)
+	}
+	defer rows.Close()
+
+	var stats []models.ContributorStats
+	totalCommits := 0
+	for rows.Next() {
+		var s models.ContributorStats
+		if err := rows.Scan(&s.Name, &s.Email, &s.GitHubLogin, &s.CommitCount); err != nil {
+			return nil, 0, fmt.Errorf("failed to scan domain user: %w", err)
+		}
+		totalCommits += s.CommitCount
+		stats = append(stats, s)
+	}
+
+	// Calculate percentages
+	for i := range stats {
+		if totalCommits > 0 {
+			stats[i].Percentage = float64(stats[i].CommitCount) / float64(totalCommits) * 100
+		}
+	}
+
+	return stats, totalCommits, nil
+}
+
+// SearchUsersWithDockerAndDomains returns committers who have both:
+// 1. Valid Docker Hub profiles (not None/Error)
+// 2. Email domain matching highlight_domains
+func (db *DB) SearchUsersWithDockerAndDomains() ([]models.ContributorStats, int, error) {
+	// First get all highlight domains
+	domains, err := db.GetDomains()
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to get domains: %w", err)
+	}
+
+	if len(domains) == 0 {
+		return []models.ContributorStats{}, 0, nil
+	}
+
+	// Build domain match conditions
+	var domainConditions []string
+	var args []interface{}
+	for domain := range domains {
+		domainConditions = append(domainConditions, "c.committer_email LIKE ?")
+		args = append(args, "%@"+domain)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT DISTINCT 
+			c.committer_name,
+			c.committer_email,
+			COALESCE(c.github_committer_login, '') as github_login,
+			COUNT(*) as commit_count
+		FROM commits c
+		JOIN user_profiles p ON c.github_committer_login = p.login
+		WHERE p.social_accounts IS NOT NULL 
+			AND p.social_accounts != ''
+			AND p.social_accounts != '[]'
+			AND p.social_accounts LIKE '%%DOCKERHUB%%'
+			AND p.social_accounts NOT LIKE '%%"displayName":"None"%%'
+			AND p.social_accounts NOT LIKE '%%"displayName":"Not found"%%'
+			AND p.social_accounts NOT LIKE '%%"displayName":"Error"%%'
+			AND (%s)
+		GROUP BY c.committer_email
+		ORDER BY commit_count DESC
+	`, strings.Join(domainConditions, " OR "))
+
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to search users with docker and domains: %w", err)
+	}
+	defer rows.Close()
+
+	var stats []models.ContributorStats
+	totalCommits := 0
+	for rows.Next() {
+		var s models.ContributorStats
+		if err := rows.Scan(&s.Name, &s.Email, &s.GitHubLogin, &s.CommitCount); err != nil {
+			return nil, 0, fmt.Errorf("failed to scan docker+domain user: %w", err)
+		}
+		totalCommits += s.CommitCount
+		stats = append(stats, s)
+	}
+
+	// Calculate percentages
+	for i := range stats {
+		if totalCommits > 0 {
+			stats[i].Percentage = float64(stats[i].CommitCount) / float64(totalCommits) * 100
+		}
+	}
+
+	return stats, totalCommits, nil
 }
 

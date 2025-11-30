@@ -50,16 +50,54 @@ func clamp(value, min, max int) int {
 	return value
 }
 
-// TableColumns defines the main committer table columns - single source of truth
-// Total width: 94 + 12 (6 separators @ 2 spaces each) = 106 to fill TableWidth
-var TableColumns = []table.Column{
-	{Title: "Tag", Width: 5},
-	{Title: "Rank", Width: 6},
-	{Title: "Name", Width: 20},
-	{Title: "GitHub Login", Width: 15},
-	{Title: "Email", Width: 33},
-	{Title: "Commits", Width: 8},
-	{Title: "%", Width: 7},
+// Minimum column widths (used as fallback and for header sizing)
+const (
+	ColWidthTag     = 5
+	ColWidthRank    = 6
+	ColWidthName    = 12
+	ColWidthLogin   = 12
+	ColWidthEmail   = 20
+	ColWidthCommits = 8
+	ColWidthPercent = 7
+	// 6 column separators at 2 spaces each = 12
+	ColSeparators = 12
+)
+
+// ColumnWidths holds the calculated widths for each column
+type ColumnWidths struct {
+	Tag     int
+	Rank    int
+	Name    int
+	Login   int
+	Email   int
+	Commits int
+	Percent int
+}
+
+// DefaultColumnWidths returns minimum column widths
+func DefaultColumnWidths() ColumnWidths {
+	return ColumnWidths{
+		Tag:     ColWidthTag,
+		Rank:    ColWidthRank,
+		Name:    ColWidthName,
+		Login:   ColWidthLogin,
+		Email:   ColWidthEmail,
+		Commits: ColWidthCommits,
+		Percent: ColWidthPercent,
+	}
+}
+
+// BuildTableColumns creates table columns from calculated widths
+func BuildTableColumns(widths ColumnWidths) []table.Column {
+	return []table.Column{
+		{Title: "Tag", Width: widths.Tag},
+		{Title: "Rank", Width: widths.Rank},
+		{Title: "Name", Width: widths.Name},
+		{Title: "GitHub Login", Width: widths.Login},
+		{Title: "Email", Width: widths.Email},
+		{Title: "Commits", Width: widths.Commits},
+		{Title: "%", Width: widths.Percent},
+	}
 }
 
 // Color palette - centralized color definitions

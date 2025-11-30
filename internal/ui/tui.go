@@ -57,10 +57,18 @@ var menuOptions = []string{
 	"Configure Highlight Domains",
 	"Add Repository",
 	"Query Tagged Users",
+	"Search",
 	"Switch Project",
 	"Export Tab to Markdown",
 	"Export Database Backup",
 	"Export Project Report",
+}
+
+// Search query options
+var searchOptions = []string{
+	"Users with Docker profiles",
+	"Users in highlight domains",
+	"Users with Docker AND in highlight domains",
 }
 
 // gistFileEntry represents a flattened view of a gist file with parent gist info
@@ -168,6 +176,12 @@ type TUIModel struct {
 	// Processed users cache - logins with fetched data show [!] instead of [x]
 	processedLogins map[string]bool
 
+	// Search state
+	searchActive      bool   // whether search results are being displayed
+	searchQuery       string // current search query type: "docker", "domains"
+	searchPickerVisible bool // whether search query picker is shown
+	searchPickerCursor  int  // cursor in search picker
+
 	// Delete confirmation state
 	deleteConfirmVisible bool
 	deleteConfirmForm    *huh.Form
@@ -195,6 +209,109 @@ func isServiceAccount(login, email string) bool {
 	return false
 }
 
+// calculateColumnWidths computes column widths based on actual data content
+// and constrains them to fit within the available table width
+func calculateColumnWidths(stats []models.ContributorStats, tableWidth int) ColumnWidths {
+	widths := DefaultColumnWidths()
+
+	// Scan all rows to find max width needed for each column
+	for i, s := range stats {
+		// Rank column: width of rank number
+		rankStr := fmt.Sprintf("%d", i+1)
+		if len(rankStr) > widths.Rank {
+			widths.Rank = len(rankStr)
+		}
+
+		// Name column
+		if len(s.Name) > widths.Name {
+			widths.Name = len(s.Name)
+		}
+
+		// GitHub Login column
+		login := s.GitHubLogin
+		if login == "" {
+			login = "-"
+		}
+		if len(login) > widths.Login {
+			widths.Login = len(login)
+		}
+
+		// Email column
+		if len(s.Email) > widths.Email {
+			widths.Email = len(s.Email)
+		}
+
+		// Commits column
+		commitsStr := fmt.Sprintf("%d", s.CommitCount)
+		if len(commitsStr) > widths.Commits {
+			widths.Commits = len(commitsStr)
+		}
+
+		// Percent column
+		pctStr := fmt.Sprintf("%.1f%%", s.Percentage)
+		if len(pctStr) > widths.Percent {
+			widths.Percent = len(pctStr)
+		}
+	}
+
+	// Ensure header titles fit
+	if len("Tag") > widths.Tag {
+		widths.Tag = len("Tag")
+	}
+	if len("Rank") > widths.Rank {
+		widths.Rank = len("Rank")
+	}
+	if len("Name") > widths.Name {
+		widths.Name = len("Name")
+	}
+	if len("GitHub Login") > widths.Login {
+		widths.Login = len("GitHub Login")
+	}
+	if len("Email") > widths.Email {
+		widths.Email = len("Email")
+	}
+	if len("Commits") > widths.Commits {
+		widths.Commits = len("Commits")
+	}
+	if len("%") > widths.Percent {
+		widths.Percent = len("%")
+	}
+
+	// Calculate total width and constrain flexible columns if needed
+	totalWidth := widths.Tag + widths.Rank + widths.Name + widths.Login +
+		widths.Email + widths.Commits + widths.Percent + ColSeparators
+
+	if totalWidth > tableWidth {
+		// Need to shrink flexible columns (Name, Login, Email)
+		overflow := totalWidth - tableWidth
+		flexibleTotal := widths.Name + widths.Login + widths.Email
+
+		// Shrink each flexible column proportionally
+		if flexibleTotal > overflow {
+			nameShare := float64(widths.Name) / float64(flexibleTotal)
+			loginShare := float64(widths.Login) / float64(flexibleTotal)
+			emailShare := float64(widths.Email) / float64(flexibleTotal)
+
+			widths.Name -= int(float64(overflow) * nameShare)
+			widths.Login -= int(float64(overflow) * loginShare)
+			widths.Email -= int(float64(overflow) * emailShare)
+
+			// Ensure minimums
+			if widths.Name < ColWidthName {
+				widths.Name = ColWidthName
+			}
+			if widths.Login < ColWidthLogin {
+				widths.Login = ColWidthLogin
+			}
+			if widths.Email < ColWidthEmail {
+				widths.Email = ColWidthEmail
+			}
+		}
+	}
+
+	return widths
+}
+
 // NewTUIModel creates a new interactive table model
 func NewTUIModel(
 	stats []models.ContributorStats,
@@ -207,8 +324,10 @@ func NewTUIModel(
 	totalCommits int,
 	cached bool,
 ) TUIModel {
-	// Use centralized column definitions from styles.go
-	columns := TableColumns
+	// Calculate column widths based on actual data content, constrained to fit viewport
+	layout := DefaultLayout()
+	widths := calculateColumnWidths(stats, layout.TableWidth)
+	columns := BuildTableColumns(widths)
 
 	// Build processed logins cache - check which users have fetched data
 	processedLogins := make(map[string]bool)
@@ -270,11 +389,11 @@ func NewTUIModel(
 		Foreground(ColorText)
 
 	// Note: Cell foreground is set in renderTableWithLinks to avoid conflicts with link colors
-
+	// Selection highlighting is handled in renderTableWithLinks for full-width bar
 	s.Selected = s.Selected.
 		Foreground(ColorText).
-		Background(ColorHighlight).
-		Bold(true)
+		Background(lipgloss.NoColor{}).
+		Bold(false)
 
 	t.SetStyles(s)
 
@@ -285,7 +404,6 @@ func NewTUIModel(
 	}
 
 	// Initialize progress bar with red from style guide
-	layout := DefaultLayout()
 	prog := progress.New(
 		progress.WithSolidFill(string(ColorText)), // bright white fill (15)
 		progress.WithWidth(layout.ContentWidth-4),
@@ -328,6 +446,7 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.layout = NewLayout(msg.Width)
 		m.progressBar.Width = m.layout.ContentWidth - 4
+		m.rebuildTable()
 		return m, nil
 
 	// Handle progress bar frame messages for animation
@@ -558,6 +677,11 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleMenu(msg)
 		}
 
+		// Handle search picker navigation
+		if m.searchPickerVisible {
+			return m.handleSearchPicker(msg)
+		}
+
 		// Block input while fetching
 		if m.fetchingRepo != nil || m.queryingUsers {
 			return m, nil
@@ -576,6 +700,11 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "m", "M":
 			m.menuVisible = true
 			m.menuCursor = 0
+			return m, nil
+
+		case "s", "S":
+			m.searchPickerVisible = true
+			m.searchPickerCursor = 0
 			return m, nil
 
 		case "left", "h":
@@ -982,11 +1111,15 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else if m.token == "" {
 				m.exportMessage = "GitHub token required for user queries"
 			}
-		case 3: // Switch Project
+		case 3: // Search
+			m.menuVisible = false
+			m.searchPickerVisible = true
+			m.searchPickerCursor = 0
+		case 4: // Switch Project
 			m.menuVisible = false
 			m.switchProject = true
 			return m, tea.Quit
-		case 4: // Export Tab to Markdown
+		case 5: // Export Tab to Markdown
 			m.menuVisible = false
 			filename, err := ExportTabToMarkdown(m.stats, m.repoOwner, m.repoName, m.totalCommits, m.showCombined)
 			if err != nil {
@@ -994,7 +1127,7 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.exportMessage = fmt.Sprintf("Exported to %s", filename)
 			}
-		case 5: // Export Database Backup
+		case 6: // Export Database Backup
 			m.menuVisible = false
 			if m.dbPath != "" {
 				filename, err := ExportDatabaseBackup(m.dbPath)
@@ -1006,7 +1139,7 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.exportMessage = "Database path not available"
 			}
-		case 6: // Export Project Report
+		case 7: // Export Project Report
 			m.menuVisible = false
 			if m.database != nil {
 				filename, err := ExportProjectReport(m.database, m.dbPath)
@@ -1018,6 +1151,49 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.exportMessage = "Database not available"
 			}
+		}
+		return m, nil
+	}
+
+	return m, nil
+}
+
+// handleSearchPicker handles key events in search query picker
+func (m TUIModel) handleSearchPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "q":
+		m.searchPickerVisible = false
+		return m, nil
+
+	case "up", "k":
+		if m.searchPickerCursor > 0 {
+			m.searchPickerCursor--
+		}
+		return m, nil
+
+	case "down", "j":
+		if m.searchPickerCursor < len(searchOptions)-1 {
+			m.searchPickerCursor++
+		}
+		return m, nil
+
+	case "c", "C":
+		// Clear search if active
+		if m.searchActive {
+			m.searchPickerVisible = false
+			m.clearSearch()
+		}
+		return m, nil
+
+	case "enter":
+		m.searchPickerVisible = false
+		switch m.searchPickerCursor {
+		case 0: // Users with Docker profiles
+			m.switchToSearch("docker")
+		case 1: // Users in highlight domains
+			m.switchToSearch("domains")
+		case 2: // Users with Docker AND in highlight domains
+			m.switchToSearch("docker_and_domains")
 		}
 		return m, nil
 	}
@@ -1272,10 +1448,80 @@ func (m *TUIModel) switchToCombined() {
 	m.rebuildTable()
 }
 
+// switchToSearch runs a search query and displays results in the Search tab
+func (m *TUIModel) switchToSearch(queryType string) {
+	if m.database == nil {
+		return
+	}
+
+	var stats []models.ContributorStats
+	var total int
+	var err error
+
+	switch queryType {
+	case "docker":
+		stats, total, err = m.database.SearchUsersWithDocker()
+		m.searchQuery = "Docker"
+	case "domains":
+		stats, total, err = m.database.SearchUsersByDomains()
+		m.searchQuery = "Domains"
+	case "docker_and_domains":
+		stats, total, err = m.database.SearchUsersWithDockerAndDomains()
+		m.searchQuery = "Docker+Domains"
+	default:
+		return
+	}
+
+	if err != nil {
+		stats = []models.ContributorStats{}
+		total = 0
+	}
+
+	m.stats = stats
+	m.totalCommits = total
+	m.searchActive = true
+	m.showCombined = false
+	m.repoOwner = "Search"
+	m.repoName = m.searchQuery
+
+	// Clear repo-specific data for search view
+	m.links = make(map[string]int)
+	m.tags = make(map[string]bool)
+	m.pendingLinks = nil
+
+	// Load global highlight domains
+	domains, err := m.database.GetDomains()
+	if err != nil {
+		domains = make(map[string]int)
+	}
+	m.highlightDomains = domains
+	m.domainList = make([]string, 0, len(domains))
+	for domain := range domains {
+		m.domainList = append(m.domainList, domain)
+	}
+
+	// Rebuild table
+	m.rebuildTable()
+}
+
+// clearSearch clears the current search and returns to the first repo
+func (m *TUIModel) clearSearch() {
+	m.searchActive = false
+	m.searchQuery = ""
+	if len(m.repos) > 0 {
+		m.currentRepoIndex = 0
+		m.switchToRepo(0)
+	}
+}
+
 // rebuildTable recreates the table with current stats
 func (m *TUIModel) rebuildTable() {
-	// Use centralized column definitions from styles.go
-	columns := TableColumns
+	// Save current cursor position before rebuilding
+	oldCursor := m.table.Cursor()
+
+	// Calculate column widths based on actual data content, constrained to fit viewport
+	widths := calculateColumnWidths(m.stats, m.layout.TableWidth)
+	columns := BuildTableColumns(widths)
 
 	// Rebuild processed logins cache
 	m.processedLogins = make(map[string]bool)
@@ -1339,6 +1585,16 @@ func (m *TUIModel) rebuildTable() {
 		Bold(true)
 
 	t.SetStyles(s)
+
+	// Restore cursor position (clamped to valid range)
+	if oldCursor >= len(rows) {
+		oldCursor = len(rows) - 1
+	}
+	if oldCursor < 0 {
+		oldCursor = 0
+	}
+	t.SetCursor(oldCursor)
+
 	m.table = t
 }
 
@@ -1579,7 +1835,7 @@ func (m *TUIModel) showUserDetail(login, name, email string) {
 
 	// Build clickable profile rows
 	var profileRows []profileRow
-	
+
 	// Username - always clickable
 	profileRows = append(profileRows, profileRow{
 		Label:        "Username:",
@@ -2078,6 +2334,11 @@ func (m TUIModel) View() string {
 		return m.renderDomainConfig()
 	}
 
+	// Show search picker if visible
+	if m.searchPickerVisible {
+		return m.renderSearchPicker()
+	}
+
 	// Show menu if visible
 	if m.menuVisible {
 		return m.renderMenu()
@@ -2137,18 +2398,19 @@ func (m TUIModel) View() string {
 			"  u              Unlink current row from its group",
 			"  U              Query tagged users (fetches GitHub data)",
 		}
-		
+
 		rightCol := []string{
 			"",
 			"  T              Toggle tag [ ]/[x], or clear [!] for re-scan",
 			"  A              Add repository (quick add, skips menu)",
 			"  R              Remove current repository (with confirmation)",
+			"  S              Search (Docker profiles, highlight domains)",
 			"  X              Export project report (all repos summary)",
 			"  M              Open menu (all options)",
 			"  ?              Toggle this help",
 			"  q              Quit",
 		}
-		
+
 		// Calculate left column width (find max length)
 		leftColWidth := 0
 		for _, line := range leftCol {
@@ -2157,7 +2419,7 @@ func (m TUIModel) View() string {
 			}
 		}
 		leftColWidth += 4 // Add spacing between columns
-		
+
 		// Build two-column help text with leading space for border padding
 		var helpBuilder strings.Builder
 		for i := 0; i < len(leftCol); i++ {
@@ -2169,13 +2431,13 @@ func (m TUIModel) View() string {
 			helpBuilder.WriteString(rightCol[i])
 			helpBuilder.WriteString("\n")
 		}
-		
+
 		// Add empty line before tags
 		helpBuilder.WriteString("\n")
-		
+
 		// Add tags explanation at the bottom with leading space
 		helpBuilder.WriteString(" Tags: [ ]=untagged, [x]=tagged, [!]=scanned (press T to clear for re-scan)")
-		
+
 		b.WriteString(NormalStyle.Render(helpBuilder.String()))
 	} else {
 		// Build footer with three sections
@@ -2261,20 +2523,31 @@ func (m TUIModel) renderPageIndicator() string {
 	// Add Combined tab
 	combinedLabel := "Combined"
 	var combinedRendered string
-	if m.showCombined {
+	if m.showCombined && !m.searchActive {
 		combinedRendered = activeStyle.Render(combinedLabel)
 	} else {
 		combinedRendered = inactiveStyle.Render(combinedLabel)
 	}
-	tabs = append(tabs, tabInfo{combinedLabel, combinedRendered, lipgloss.Width(combinedRendered), m.showCombined})
+	tabs = append(tabs, tabInfo{combinedLabel, combinedRendered, lipgloss.Width(combinedRendered), m.showCombined && !m.searchActive})
+
+	// Add Search tab if search is active
+	if m.searchActive {
+		searchLabel := "Search: " + m.searchQuery
+		searchRendered := activeStyle.Render(searchLabel)
+		tabs = append(tabs, tabInfo{searchLabel, searchRendered, lipgloss.Width(searchRendered), true})
+	}
 
 	// Calculate available width for tabs (viewport - left padding - arrows - right padding)
 	// Layout: "  < [tabs] >"  =>  2 + 2 + tabs + 2 = viewport
 	availableWidth := m.layout.ViewportWidth - 6
 
 	// Find which tabs to display, keeping active tab visible
-	activeIdx := len(tabs) - 1 // Combined
-	if !m.showCombined {
+	activeIdx := len(tabs) - 1 // Last tab (Combined or Search if active)
+	if m.searchActive {
+		activeIdx = len(tabs) - 1 // Search tab is last
+	} else if m.showCombined {
+		activeIdx = len(tabs) - 1 // Combined tab
+	} else {
 		activeIdx = m.currentRepoIndex
 	}
 
@@ -2508,10 +2781,10 @@ func (m TUIModel) renderUserDetail() string {
 			if len(label) < labelWidth {
 				label += strings.Repeat(" ", labelWidth-len(label))
 			}
-			
+
 			// Format full line
 			line := label + row.DisplayValue
-			
+
 			// Apply selector highlighting
 			if i == m.userDetailCursor {
 				b.WriteString(SelectedStyle.Width(m.layout.InnerWidth).Render(line))
@@ -2586,7 +2859,7 @@ func (m TUIModel) renderUserDetail() string {
 
 			// Track gist info for the next file row
 			var pendingGistInfo *gistFileEntry
-			
+
 			for i := startIdx; i < endIdx; i++ {
 				file := m.userGistFiles[i]
 
@@ -2613,7 +2886,7 @@ func (m TUIModel) renderUserDetail() string {
 				if file.Size >= 1024 {
 					sizeStr = fmt.Sprintf("%.1fKB", float64(file.Size)/1024)
 				}
-				
+
 				// If this is the first file in a gist, show gist info
 				var updated, guid, countLabel string
 				if pendingGistInfo != nil {
@@ -2632,7 +2905,7 @@ func (m TUIModel) renderUserDetail() string {
 					countLabel = fmt.Sprintf("%d %s", pendingGistInfo.FileCount, filesWord)
 					pendingGistInfo = nil // Clear it after using
 				}
-				
+
 				line := fmt.Sprintf("%-50s %-10s %-7s %-4d %-10s  %-32s  %-10s", name, lang, sizeStr, file.RevisionCount, updated, guid, countLabel)
 				if i == m.userDetailCursor {
 					b.WriteString(SelectedStyle.Width(m.layout.InnerWidth).Render(line))
@@ -2640,12 +2913,12 @@ func (m TUIModel) renderUserDetail() string {
 					b.WriteString(NormalStyle.Render(line))
 				}
 				b.WriteString("\n")
-				
+
 				// Add divider AFTER last file in gist if next item is a divider
 				isLastInView := (i == endIdx-1)
 				isLastInList := (i == len(m.userGistFiles)-1)
 				nextIsDivider := !isLastInList && i+1 < len(m.userGistFiles) && m.userGistFiles[i+1].IsDivider
-				
+
 				if nextIsDivider && !isLastInView {
 					// Render divider to separate gist groups
 					dividerText := strings.Repeat("─", m.layout.InnerWidth)
@@ -2771,6 +3044,38 @@ func (m TUIModel) renderDomainConfig() string {
 	return borderStyle.Render(b.String())
 }
 
+// renderSearchPicker renders the search query picker overlay
+func (m TUIModel) renderSearchPicker() string {
+	var b strings.Builder
+
+	menuSelectedStyle := SelectedStyle.Padding(0, 1)
+	menuNormalStyle := NormalStyle.Padding(0, 1)
+
+	b.WriteString(TitleStyle.Render("Search"))
+	b.WriteString("\n\n")
+
+	for i, option := range searchOptions {
+		if i == m.searchPickerCursor {
+			b.WriteString(menuSelectedStyle.Render("> " + option))
+		} else {
+			b.WriteString(menuNormalStyle.Render("  " + option))
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n")
+	if m.searchActive {
+		b.WriteString(HintStyle.Render("Enter: select | C: clear search | Esc: close"))
+	} else {
+		b.WriteString(HintStyle.Render("Enter: select | Esc: close"))
+	}
+
+	// Add border around picker with width from layout
+	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).Padding(1, 1).MarginTop(1)
+
+	return borderStyle.Render(b.String())
+}
+
 // extractDomain extracts the domain part from an email address
 func extractDomain(email string) string {
 	parts := strings.Split(email, "@")
@@ -2811,34 +3116,33 @@ func (m TUIModel) renderTableWithLinks() string {
 
 	// Split into lines and colorize based on row content
 	lines := strings.Split(baseView, "\n")
-	result := make([]string, len(lines))
+	var result []string
 
-	// Header row + border line = 2 lines before data
-	headerLines := 2
-
-	// Get current cursor position to identify selected row
+	// Get current cursor position for full-width selection
 	cursor := m.table.Cursor()
 
+	// Track data row index (rows after header)
+	dataRowIndex := 0
+
 	for i, line := range lines {
-		// Replace the table's built-in divider (line 1) with full-width white divider
-		// STYLE GUIDE: Dividers use InnerWidth (not ViewportWidth) to fit inside border
+		// Skip the table's built-in divider line (line 1) - don't render it
+		// This prevents duplicate dividers since the border provides visual separation
 		if i == 1 {
-			result[i] = strings.Repeat("─", m.layout.InnerWidth)
-			continue
-		}
-		// Keep header row (line 0)
-		if i < headerLines {
-			result[i] = line
 			continue
 		}
 
-		// Calculate data row index (subtract header lines)
-		dataRowIndex := i - headerLines
+		// Keep header row (line 0) as-is
+		if i == 0 {
+			result = append(result, line)
+			continue
+		}
 
-		// Check if this is the selected row
-		// STYLE GUIDE: Selectors use .Width(InnerWidth) for edge-to-edge rendering
+		// For data rows (i >= 2), calculate the actual data index
+		dataRowIndex = i - 2
+
+		// Full-width selection highlighting
 		if dataRowIndex == cursor {
-			result[i] = SelectedStyle.Width(m.layout.InnerWidth).Render(line)
+			result = append(result, SelectedStyle.Width(m.layout.InnerWidth).Render(line))
 			continue
 		}
 
@@ -2846,7 +3150,7 @@ func (m TUIModel) renderTableWithLinks() string {
 		email := extractEmailFromRow(line)
 		if email == "" {
 			// No email found, probably not a data row
-			result[i] = line
+			result = append(result, line)
 			continue
 		}
 
@@ -2855,7 +3159,7 @@ func (m TUIModel) renderTableWithLinks() string {
 			style := lipgloss.NewStyle().
 				Foreground(ColorBlack).
 				Background(ColorAccentDim)
-			result[i] = style.Render(line)
+			result = append(result, style.Render(line))
 			continue
 		}
 
@@ -2864,7 +3168,7 @@ func (m TUIModel) renderTableWithLinks() string {
 			colorIdx := (groupID - 1) % len(linkColors)
 			color := linkColors[colorIdx]
 			style := lipgloss.NewStyle().Foreground(color)
-			result[i] = style.Render(line)
+			result = append(result, style.Render(line))
 			continue
 		}
 
@@ -2872,13 +3176,13 @@ func (m TUIModel) renderTableWithLinks() string {
 		domain := extractDomain(email)
 		if _, ok := m.highlightDomains[domain]; ok {
 			style := lipgloss.NewStyle().Foreground(ColorAccent)
-			result[i] = style.Render(line)
+			result = append(result, style.Render(line))
 			continue
 		}
 
 		// Apply bright white to non-highlighted rows
 		style := lipgloss.NewStyle().Foreground(ColorText)
-		result[i] = style.Render(line)
+		result = append(result, style.Render(line))
 	}
 
 	return strings.Join(result, "\n")
@@ -2994,7 +3298,11 @@ func formatProviderName(provider string) string {
 		return "Facebook"
 	default:
 		// Title case for others
-		return strings.Title(strings.ToLower(provider))
+		s := strings.ToLower(provider)
+		if len(s) == 0 {
+			return s
+		}
+		return strings.ToUpper(s[:1]) + s[1:]
 	}
 }
 
