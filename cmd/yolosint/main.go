@@ -197,6 +197,12 @@ func main() {
 			repo = fileRepo
 			ui.PrintSuccess(fmt.Sprintf("Loaded %d commits from %s", len(commits), *fileFlag))
 
+			// Ensure repo is tracked before storing commits
+			if err := database.AddTrackedRepo(owner, repo); err != nil {
+				ui.PrintError(fmt.Sprintf("Failed to add tracked repo: %v", err))
+				os.Exit(1)
+			}
+
 			// Store in database
 			records := make([]models.CommitRecord, len(commits))
 			for i, c := range commits {
@@ -275,6 +281,12 @@ func fetchAndStoreCommits(tokenFlag *string, owner, repo string, database *db.DB
 		ui.PrintSuccess("No new commits to fetch")
 	} else {
 		ui.PrintSuccess(fmt.Sprintf("Fetched %d commits from %s/%s", len(commits), owner, repo))
+
+		// Ensure repo is tracked before storing commits
+		if err := database.AddTrackedRepo(owner, repo); err != nil {
+			ui.PrintError(fmt.Sprintf("Failed to add tracked repo: %v", err))
+			os.Exit(1)
+		}
 
 		// Store in database
 		records := make([]models.CommitRecord, len(commits))

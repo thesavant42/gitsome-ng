@@ -2,6 +2,7 @@ package ui
 
 import (
 	"github.com/charmbracelet/bubbles/table"
+	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -19,6 +20,7 @@ type Layout struct {
 	ViewportWidth int // clamped terminal width
 	ContentWidth  int // ViewportWidth - border chars
 	TableWidth    int // sum of column widths + separators
+	InnerWidth    int // ViewportWidth - 2 (EXACT width for content inside borders - THE ONE RULE)
 }
 
 // NewLayout creates a Layout from the terminal width, clamping to min/max
@@ -28,6 +30,7 @@ func NewLayout(terminalWidth int) Layout {
 		ViewportWidth: width,
 		ContentWidth:  width - 2,  // minus border chars
 		TableWidth:    width - 4,  // minus border + padding
+		InnerWidth:    width - 2,  // EXACT width for content inside borders (THE ONE RULE)
 	}
 }
 
@@ -48,12 +51,13 @@ func clamp(value, min, max int) int {
 }
 
 // TableColumns defines the main committer table columns - single source of truth
+// Total width: 94 + 12 (6 separators @ 2 spaces each) = 106 to fill TableWidth
 var TableColumns = []table.Column{
 	{Title: "Tag", Width: 5},
 	{Title: "Rank", Width: 6},
 	{Title: "Name", Width: 20},
 	{Title: "GitHub Login", Width: 15},
-	{Title: "Email", Width: 40},
+	{Title: "Email", Width: 33},
 	{Title: "Commits", Width: 8},
 	{Title: "%", Width: 7},
 }
@@ -84,6 +88,9 @@ var LinkColors = []lipgloss.Color{
 // Common styles - reusable style definitions
 var (
 	// Border style for main viewport
+	// STYLE GUIDE: Always use .Width(ViewportWidth) with NO .Padding()
+	// This ensures consistent 2-char overhead (left + right border edges)
+	// Content inside borders must use InnerWidth (ViewportWidth - 2)
 	BorderStyle = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ColorBorder)
@@ -138,6 +145,16 @@ var (
 	StatsStyle = lipgloss.NewStyle().
 		Bold(true).
 		Foreground(ColorText)
+
+	// Gist divider row style - accent yellow, no background
+	DividerStyle = lipgloss.NewStyle().
+		Foreground(ColorAccent)
+
+	// Gist divider row selected style - accent on red highlight
+	DividerSelectedStyle = lipgloss.NewStyle().
+		Foreground(ColorAccent).
+		Background(ColorHighlight).
+		Bold(true)
 )
 
 // BorderedBox returns a style for bordered content boxes with the layout width
@@ -150,5 +167,60 @@ func BorderedBox(layout Layout) lipgloss.Style {
 // BorderedBoxDefault returns a bordered box with default width
 func BorderedBoxDefault() lipgloss.Style {
 	return BorderedBox(DefaultLayout())
+}
+
+// NewAppTheme creates a huh theme matching the app's style guide
+// White text, red highlights/selection
+func NewAppTheme() *huh.Theme {
+	t := huh.ThemeBase()
+
+	// Title styling - white bold
+	t.Focused.Title = lipgloss.NewStyle().
+		Foreground(ColorText).
+		Bold(true)
+	t.Blurred.Title = t.Focused.Title
+
+	// Description - white
+	t.Focused.Description = lipgloss.NewStyle().
+		Foreground(ColorText)
+	t.Blurred.Description = t.Focused.Description
+
+	// Base text - white
+	t.Focused.Base = lipgloss.NewStyle().
+		Foreground(ColorText)
+	t.Blurred.Base = t.Focused.Base
+
+	// Selected option - red background, white text
+	t.Focused.SelectedOption = lipgloss.NewStyle().
+		Foreground(ColorText).
+		Background(ColorBorder).
+		Bold(true).
+		Padding(0, 1)
+
+	// Unselected option - white text
+	t.Focused.UnselectedOption = lipgloss.NewStyle().
+		Foreground(ColorText).
+		Padding(0, 1)
+
+	// Focus bar (the | indicator) - red
+	t.Focused.FocusedButton = lipgloss.NewStyle().
+		Foreground(ColorText).
+		Background(ColorBorder).
+		Bold(true).
+		Padding(0, 1)
+
+	t.Focused.BlurredButton = lipgloss.NewStyle().
+		Foreground(ColorText).
+		Padding(0, 1)
+
+	// Text input styling
+	t.Focused.TextInput.Cursor = lipgloss.NewStyle().
+		Foreground(ColorBorder)
+	t.Focused.TextInput.Placeholder = lipgloss.NewStyle().
+		Foreground(ColorTextDim)
+	t.Focused.TextInput.Prompt = lipgloss.NewStyle().
+		Foreground(ColorBorder)
+
+	return t
 }
 

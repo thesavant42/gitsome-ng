@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -86,11 +87,26 @@ func New(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("failed to create gist comments schema: %w", err)
 	}
 
+	// Initialize user profiles table
+	if _, err := conn.Exec(createUserProfilesTable); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to create user profiles schema: %w", err)
+	}
+
+	// Initialize API logs table
+	if _, err := conn.Exec(createAPILogsTable); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to create API logs schema: %w", err)
+	}
+
 	// Run migrations to add new columns to existing tables
 	// These will silently fail if columns already exist
 	migrations := []string{
 		"ALTER TABLE user_repositories ADD COLUMN commit_count INTEGER DEFAULT 0",
 		"ALTER TABLE user_gists ADD COLUMN revision_count INTEGER DEFAULT 0",
+		"ALTER TABLE user_repositories ADD COLUMN primary_language TEXT",
+		"ALTER TABLE user_repositories ADD COLUMN license_name TEXT",
+		"ALTER TABLE user_gists ADD COLUMN fork_count INTEGER DEFAULT 0",
 	}
 	for _, migration := range migrations {
 		conn.Exec(migration) // Ignore errors - column may already exist
@@ -486,8 +502,9 @@ func (db *DB) SaveUserRepository(repo models.UserRepository) error {
 	_, err := db.conn.Exec(insertUserRepository,
 		repo.GitHubLogin, repo.Name, repo.OwnerLogin, repo.Description,
 		repo.URL, repo.SSHURL, repo.HomepageURL, repo.DiskUsage,
-		repo.StargazerCount, repo.ForkCount, repo.IsFork, repo.IsEmpty,
+		repo.StargazerCount, repo.ForkCount, repo.CommitCount, repo.IsFork, repo.IsEmpty,
 		repo.IsInOrganization, repo.HasWikiEnabled, repo.Visibility,
+		repo.PrimaryLanguage, repo.LicenseName,
 		repo.CreatedAt, repo.UpdatedAt, repo.PushedAt,
 	)
 	if err != nil {
@@ -516,6 +533,7 @@ func (db *DB) SaveUserRepositories(repos []models.UserRepository) error {
 			repo.URL, repo.SSHURL, repo.HomepageURL, repo.DiskUsage,
 			repo.StargazerCount, repo.ForkCount, repo.CommitCount, repo.IsFork, repo.IsEmpty,
 			repo.IsInOrganization, repo.HasWikiEnabled, repo.Visibility,
+			repo.PrimaryLanguage, repo.LicenseName,
 			repo.CreatedAt, repo.UpdatedAt, repo.PushedAt,
 		)
 		if err != nil {
@@ -541,16 +559,20 @@ func (db *DB) GetUserRepositories(githubLogin string) ([]models.UserRepository, 
 	for rows.Next() {
 		var r models.UserRepository
 		var fetchedAt string
+		var primaryLang, licenseName sql.NullString
 		if err := rows.Scan(
 			&r.ID, &r.GitHubLogin, &r.Name, &r.OwnerLogin, &r.Description,
 			&r.URL, &r.SSHURL, &r.HomepageURL, &r.DiskUsage,
 			&r.StargazerCount, &r.ForkCount, &r.CommitCount, &r.IsFork, &r.IsEmpty,
 			&r.IsInOrganization, &r.HasWikiEnabled, &r.Visibility,
+			&primaryLang, &licenseName,
 			&r.CreatedAt, &r.UpdatedAt, &r.PushedAt, &fetchedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan user repository: %w", err)
 		}
 		r.FetchedAt, _ = parseTimestamp(fetchedAt)
+		r.PrimaryLanguage = primaryLang.String
+		r.LicenseName = licenseName.String
 		repos = append(repos, r)
 	}
 	return repos, nil
@@ -575,12 +597,51 @@ func (db *DB) DeleteUserRepositories(githubLogin string) error {
 	return nil
 }
 
+// DeleteUserRepository removes a single repository for a user
+func (db *DB) DeleteUserRepository(githubLogin, repoName string) error {
+	_, err := db.conn.Exec(deleteUserRepository, githubLogin, repoName)
+	if err != nil {
+		return fmt.Errorf("failed to delete user repository: %w", err)
+	}
+	return nil
+}
+
+// DeleteCommitterByEmail removes all commits for a committer by email
+func (db *DB) DeleteCommitterByEmail(repoOwner, repoName, email string) error {
+	_, err := db.conn.Exec(deleteCommitsByEmail, repoOwner, repoName, email)
+	if err != nil {
+		return fmt.Errorf("failed to delete committer commits: %w", err)
+	}
+	// Also clean up tags and links for this email
+	db.conn.Exec(deleteTag, repoOwner, repoName, email)
+	db.conn.Exec(deleteLink, repoOwner, repoName, email)
+	return nil
+}
+
+// UpdateCommitterLogin updates the GitHub login for a committer
+func (db *DB) UpdateCommitterLogin(repoOwner, repoName, email, login string) error {
+	_, err := db.conn.Exec(updateCommitterLogin, login, repoOwner, repoName, email)
+	if err != nil {
+		return fmt.Errorf("failed to update committer login: %w", err)
+	}
+	return nil
+}
+
+// UpdateCommitterName updates the name for a committer
+func (db *DB) UpdateCommitterName(repoOwner, repoName, email, name string) error {
+	_, err := db.conn.Exec(updateCommitterName, name, repoOwner, repoName, email)
+	if err != nil {
+		return fmt.Errorf("failed to update committer name: %w", err)
+	}
+	return nil
+}
+
 // SaveUserGist saves a user's gist to the database
 func (db *DB) SaveUserGist(gist models.UserGist) error {
 	_, err := db.conn.Exec(insertUserGist,
 		gist.ID, gist.GitHubLogin, gist.Name, gist.Description,
 		gist.URL, gist.ResourcePath, gist.IsPublic, gist.IsFork,
-		gist.StargazerCount, gist.CreatedAt, gist.UpdatedAt, gist.PushedAt,
+		gist.StargazerCount, gist.ForkCount, gist.RevisionCount, gist.CreatedAt, gist.UpdatedAt, gist.PushedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to save user gist: %w", err)
@@ -618,10 +679,16 @@ func (db *DB) SaveUserGists(gists []models.UserGist) error {
 		_, err := gistStmt.Exec(
 			gist.ID, gist.GitHubLogin, gist.Name, gist.Description,
 			gist.URL, gist.ResourcePath, gist.IsPublic, gist.IsFork,
-			gist.StargazerCount, gist.RevisionCount, gist.CreatedAt, gist.UpdatedAt, gist.PushedAt,
+			gist.StargazerCount, gist.ForkCount, gist.RevisionCount, gist.CreatedAt, gist.UpdatedAt, gist.PushedAt,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to save gist %s: %w", gist.ID, err)
+		}
+
+		// Delete existing files before inserting new ones
+		_, err = tx.Exec(deleteGistFiles, gist.ID)
+		if err != nil {
+			return fmt.Errorf("failed to delete existing gist files for %s: %w", gist.ID, err)
 		}
 
 		// Save files
@@ -668,7 +735,7 @@ func (db *DB) GetUserGists(githubLogin string) ([]models.UserGist, error) {
 		if err := rows.Scan(
 			&g.ID, &g.GitHubLogin, &g.Name, &g.Description,
 			&g.URL, &g.ResourcePath, &g.IsPublic, &g.IsFork,
-			&g.StargazerCount, &g.RevisionCount, &g.CreatedAt, &g.UpdatedAt, &g.PushedAt, &fetchedAt,
+			&g.StargazerCount, &g.ForkCount, &g.RevisionCount, &g.CreatedAt, &g.UpdatedAt, &g.PushedAt, &fetchedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan user gist: %w", err)
 		}
@@ -724,6 +791,24 @@ func (db *DB) DeleteUserGists(githubLogin string) error {
 	return nil
 }
 
+// DeleteUserGist removes a single gist and its files/comments
+func (db *DB) DeleteUserGist(githubLogin, gistID string) error {
+	// Delete files and comments for this gist
+	if _, err := db.conn.Exec(deleteGistFiles, gistID); err != nil {
+		return fmt.Errorf("failed to delete gist files: %w", err)
+	}
+	if _, err := db.conn.Exec(deleteGistComments, gistID); err != nil {
+		return fmt.Errorf("failed to delete gist comments: %w", err)
+	}
+
+	// Delete the gist
+	_, err := db.conn.Exec(deleteUserGist, githubLogin, gistID)
+	if err != nil {
+		return fmt.Errorf("failed to delete user gist: %w", err)
+	}
+	return nil
+}
+
 // GetGistFiles returns all files for a gist
 func (db *DB) GetGistFiles(gistID string) ([]models.GistFile, error) {
 	rows, err := db.conn.Query(selectGistFiles, gistID)
@@ -767,10 +852,79 @@ func (db *DB) GetGistComments(gistID string) ([]models.GistComment, error) {
 	return comments, nil
 }
 
-// UserHasData checks if a user has any fetched repositories or gists
+// SaveUserProfile saves a user's profile to the database
+func (db *DB) SaveUserProfile(profile models.UserProfile) error {
+	// Serialize social accounts to JSON
+	socialJSON := "[]"
+	if len(profile.SocialAccounts) > 0 {
+		bytes, err := json.Marshal(profile.SocialAccounts)
+		if err != nil {
+			return fmt.Errorf("failed to marshal social accounts: %w", err)
+		}
+		socialJSON = string(bytes)
+	}
+
+	_, err := db.conn.Exec(insertUserProfile,
+		profile.Login, profile.Name, profile.Bio, profile.Company, profile.Location,
+		profile.Email, profile.WebsiteURL, profile.TwitterUsername, profile.Pronouns,
+		profile.AvatarURL, profile.FollowerCount, profile.FollowingCount,
+		profile.CreatedAt, socialJSON,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to save user profile: %w", err)
+	}
+	return nil
+}
+
+// GetUserProfile retrieves a user's profile from the database
+func (db *DB) GetUserProfile(login string) (models.UserProfile, error) {
+	var p models.UserProfile
+	var socialJSON sql.NullString
+	var fetchedAt string
+	var name, bio, company, location, email, websiteURL, twitterUsername, pronouns, avatarURL, createdAt sql.NullString
+	var followerCount, followingCount sql.NullInt64
+
+	err := db.conn.QueryRow(selectUserProfile, login).Scan(
+		&p.Login, &name, &bio, &company, &location, &email, &websiteURL,
+		&twitterUsername, &pronouns, &avatarURL, &followerCount, &followingCount,
+		&createdAt, &socialJSON, &fetchedAt,
+	)
+	if err == sql.ErrNoRows {
+		return p, nil // Return empty profile if not found
+	}
+	if err != nil {
+		return p, fmt.Errorf("failed to get user profile: %w", err)
+	}
+
+	// Map nullable fields
+	p.Name = name.String
+	p.Bio = bio.String
+	p.Company = company.String
+	p.Location = location.String
+	p.Email = email.String
+	p.WebsiteURL = websiteURL.String
+	p.TwitterUsername = twitterUsername.String
+	p.Pronouns = pronouns.String
+	p.AvatarURL = avatarURL.String
+	p.CreatedAt = createdAt.String
+	p.FollowerCount = int(followerCount.Int64)
+	p.FollowingCount = int(followingCount.Int64)
+
+	// Parse social accounts from JSON
+	if socialJSON.Valid && socialJSON.String != "" && socialJSON.String != "[]" {
+		if err := json.Unmarshal([]byte(socialJSON.String), &p.SocialAccounts); err != nil {
+			// Log but don't fail - social accounts are optional
+			p.SocialAccounts = nil
+		}
+	}
+
+	return p, nil
+}
+
+// UserHasData checks if a user has any fetched repositories, gists, or profile
 func (db *DB) UserHasData(githubLogin string) (bool, error) {
 	var hasData bool
-	err := db.conn.QueryRow(selectUserHasData, githubLogin, githubLogin).Scan(&hasData)
+	err := db.conn.QueryRow(selectUserHasData, githubLogin, githubLogin, githubLogin).Scan(&hasData)
 	if err != nil {
 		return false, fmt.Errorf("failed to check user data: %w", err)
 	}
@@ -802,5 +956,80 @@ func (db *DB) GetTaggedUsersWithLogins(repoOwner, repoName string) ([]models.Con
 		users = append(users, u)
 	}
 	return users, nil
+}
+
+// SaveAPILog saves an API call log entry to the database
+func (db *DB) SaveAPILog(method, endpoint string, statusCode int, errorMsg string, rateLimitRemaining int, rateLimitReset, login string) error {
+	_, err := db.conn.Exec(insertAPILog, method, endpoint, statusCode, errorMsg, rateLimitRemaining, rateLimitReset, login)
+	if err != nil {
+		return fmt.Errorf("failed to save API log: %w", err)
+	}
+	return nil
+}
+
+// GetAPILogs returns the most recent API logs
+func (db *DB) GetAPILogs(limit int) ([]map[string]interface{}, error) {
+	rows, err := db.conn.Query(selectAPILogs, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query API logs: %w", err)
+	}
+	defer rows.Close()
+
+	var logs []map[string]interface{}
+	for rows.Next() {
+		var id, statusCode, rateLimitRemaining sql.NullInt64
+		var timestamp, method, endpoint, errorMsg, rateLimitReset, login sql.NullString
+		
+		if err := rows.Scan(&id, &timestamp, &method, &endpoint, &statusCode, &errorMsg, &rateLimitRemaining, &rateLimitReset, &login); err != nil {
+			return nil, fmt.Errorf("failed to scan API log: %w", err)
+		}
+		
+		log := map[string]interface{}{
+			"id":                   id.Int64,
+			"timestamp":            timestamp.String,
+			"method":               method.String,
+			"endpoint":             endpoint.String,
+			"status_code":          statusCode.Int64,
+			"error":                errorMsg.String,
+			"rate_limit_remaining": rateLimitRemaining.Int64,
+			"rate_limit_reset":     rateLimitReset.String,
+			"login":                login.String,
+		}
+		logs = append(logs, log)
+	}
+	return logs, nil
+}
+
+// GetAPILogsByLogin returns API logs for a specific user
+func (db *DB) GetAPILogsByLogin(login string, limit int) ([]map[string]interface{}, error) {
+	rows, err := db.conn.Query(selectAPILogsByLogin, login, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query API logs by login: %w", err)
+	}
+	defer rows.Close()
+
+	var logs []map[string]interface{}
+	for rows.Next() {
+		var id, statusCode, rateLimitRemaining sql.NullInt64
+		var timestamp, method, endpoint, errorMsg, rateLimitReset, loginVal sql.NullString
+		
+		if err := rows.Scan(&id, &timestamp, &method, &endpoint, &statusCode, &errorMsg, &rateLimitRemaining, &rateLimitReset, &loginVal); err != nil {
+			return nil, fmt.Errorf("failed to scan API log: %w", err)
+		}
+		
+		log := map[string]interface{}{
+			"id":                   id.Int64,
+			"timestamp":            timestamp.String,
+			"method":               method.String,
+			"endpoint":             endpoint.String,
+			"status_code":          statusCode.Int64,
+			"error":                errorMsg.String,
+			"rate_limit_remaining": rateLimitRemaining.Int64,
+			"rate_limit_reset":     rateLimitReset.String,
+			"login":                loginVal.String,
+		}
+		logs = append(logs, log)
+	}
+	return logs, nil
 }
 

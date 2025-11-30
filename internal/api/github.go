@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/log"
 	"github.com/thesavant42/gitsome-ng/internal/models"
 )
 
@@ -22,6 +25,7 @@ const (
 type Client struct {
 	httpClient *http.Client
 	token      string // Optional: for authenticated requests (higher rate limits)
+	logger     *log.Logger
 }
 
 // NewClient creates a new GitHub API client with a 30 second timeout
@@ -31,6 +35,33 @@ func NewClient(token string) *Client {
 			Timeout: 30 * time.Second,
 		},
 		token: token,
+	}
+}
+
+// NewClientWithLogging creates a new GitHub API client with logging enabled
+func NewClientWithLogging(token string, dbPath string) *Client {
+	// Create logger that writes to file in same directory as database
+	logDir := filepath.Dir(dbPath)
+	logFile := filepath.Join(logDir, "api.log")
+	
+	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err != nil {
+		// Fall back to client without file logging if we can't open the log file
+		return NewClient(token)
+	}
+	
+	logger := log.NewWithOptions(f, log.Options{
+		ReportTimestamp: true,
+		TimeFormat:      time.RFC3339,
+		Prefix:          "API",
+	})
+	
+	return &Client{
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+		token:  token,
+		logger: logger,
 	}
 }
 
@@ -75,6 +106,9 @@ func (c *Client) FetchCommits(owner, repo string, sinceSHA string, onProgress fu
 func (c *Client) fetchCommitPage(url string) ([]models.Commit, string, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
+		if c.logger != nil {
+			c.logger.Error("Failed to create request", "url", url, "error", err)
+		}
 		return nil, "", fmt.Errorf("failed to create request: %w", err)
 	}
 
@@ -86,14 +120,31 @@ func (c *Client) fetchCommitPage(url string) ([]models.Commit, string, error) {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 
+	if c.logger != nil {
+		c.logger.Info("GET", "endpoint", url)
+	}
+
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		if c.logger != nil {
+			c.logger.Error("Request failed", "url", url, "error", err)
+		}
 		return nil, "", fmt.Errorf("failed to fetch commits: %w", err)
 	}
 	defer resp.Body.Close()
 
+	// Log rate limit info
+	if c.logger != nil {
+		remaining := resp.Header.Get("X-RateLimit-Remaining")
+		reset := resp.Header.Get("X-RateLimit-Reset")
+		c.logger.Debug("Rate limit", "remaining", remaining, "reset", reset, "status", resp.StatusCode)
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		if c.logger != nil {
+			c.logger.Error("API error", "status", resp.StatusCode, "response", string(body))
+		}
 		return nil, "", fmt.Errorf("GitHub API error (status %d): %s", resp.StatusCode, string(body))
 	}
 
@@ -167,6 +218,9 @@ func (c *Client) FetchUserReposAndGists(login string) (*models.UserData, error) 
 
 	req, err := http.NewRequest("POST", graphQLURL, strings.NewReader(string(bodyBytes)))
 	if err != nil {
+		if c.logger != nil {
+			c.logger.Error("Failed to create GraphQL request", "login", login, "error", err)
+		}
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
@@ -174,18 +228,38 @@ func (c *Client) FetchUserReposAndGists(login string) (*models.UserData, error) 
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Content-Type", "application/json")
 
+	if c.logger != nil {
+		c.logger.Info("POST GraphQL", "endpoint", graphQLURL, "login", login)
+	}
+
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		if c.logger != nil {
+			c.logger.Error("GraphQL request failed", "login", login, "error", err)
+		}
 		return nil, fmt.Errorf("failed to execute request: %w", err)
 	}
 	defer resp.Body.Close()
 
+	// Log rate limit info
+	if c.logger != nil {
+		remaining := resp.Header.Get("X-RateLimit-Remaining")
+		reset := resp.Header.Get("X-RateLimit-Reset")
+		c.logger.Debug("Rate limit", "remaining", remaining, "reset", reset, "status", resp.StatusCode, "login", login)
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		if c.logger != nil {
+			c.logger.Error("Failed to read response", "login", login, "error", err)
+		}
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		if c.logger != nil {
+			c.logger.Error("GraphQL API error", "status", resp.StatusCode, "login", login, "response", string(body))
+		}
 		return nil, fmt.Errorf("GraphQL error (status %d): %s", resp.StatusCode, string(body))
 	}
 
@@ -198,6 +272,25 @@ func buildUserDataQuery(login string) string {
 query {
   user(login: "%s") {
     login
+    name
+    bio
+    company
+    location
+    email
+    websiteUrl
+    twitterUsername
+    pronouns
+    avatarUrl
+    followers { totalCount }
+    following { totalCount }
+    createdAt
+    socialAccounts(first: 10) {
+      nodes {
+        provider
+        displayName
+        url
+      }
+    }
     repositories(first: 100, orderBy: {field: CREATED_AT, direction: DESC}) {
       totalCount
       nodes {
@@ -215,6 +308,8 @@ query {
         isInOrganization
         hasWikiEnabled
         visibility
+        primaryLanguage { name }
+        licenseInfo { name }
         createdAt
         updatedAt
         pushedAt
@@ -231,6 +326,7 @@ query {
         isPublic
         isFork
         stargazerCount
+        forks { totalCount }
         createdAt
         updatedAt
         pushedAt
@@ -272,15 +368,40 @@ type graphQLResponse struct {
 }
 
 type graphQLUser struct {
-	Login        string `json:"login"`
+	Login           string `json:"login"`
+	Name            string `json:"name"`
+	Bio             string `json:"bio"`
+	Company         string `json:"company"`
+	Location        string `json:"location"`
+	Email           string `json:"email"`
+	WebsiteUrl      string `json:"websiteUrl"`
+	TwitterUsername string `json:"twitterUsername"`
+	Pronouns        string `json:"pronouns"`
+	AvatarUrl       string `json:"avatarUrl"`
+	Followers       struct {
+		TotalCount int `json:"totalCount"`
+	} `json:"followers"`
+	Following struct {
+		TotalCount int `json:"totalCount"`
+	} `json:"following"`
+	CreatedAt      string `json:"createdAt"`
+	SocialAccounts struct {
+		Nodes []graphQLSocialAccount `json:"nodes"`
+	} `json:"socialAccounts"`
 	Repositories struct {
-		TotalCount int               `json:"totalCount"`
-		Nodes      []graphQLRepo     `json:"nodes"`
+		TotalCount int           `json:"totalCount"`
+		Nodes      []graphQLRepo `json:"nodes"`
 	} `json:"repositories"`
 	Gists struct {
 		TotalCount int           `json:"totalCount"`
 		Nodes      []graphQLGist `json:"nodes"`
 	} `json:"gists"`
+}
+
+type graphQLSocialAccount struct {
+	Provider    string `json:"provider"`
+	DisplayName string `json:"displayName"`
+	URL         string `json:"url"`
 }
 
 type graphQLRepo struct {
@@ -300,6 +421,12 @@ type graphQLRepo struct {
 	IsInOrganization bool   `json:"isInOrganization"`
 	HasWikiEnabled   bool   `json:"hasWikiEnabled"`
 	Visibility       string `json:"visibility"`
+	PrimaryLanguage  *struct {
+		Name string `json:"name"`
+	} `json:"primaryLanguage"`
+	LicenseInfo *struct {
+		Name string `json:"name"`
+	} `json:"licenseInfo"`
 	CreatedAt        string `json:"createdAt"`
 	UpdatedAt        string `json:"updatedAt"`
 	PushedAt         string `json:"pushedAt"`
@@ -321,14 +448,17 @@ type graphQLGist struct {
 	IsPublic       bool   `json:"isPublic"`
 	IsFork         bool   `json:"isFork"`
 	StargazerCount int    `json:"stargazerCount"`
-	CreatedAt      string `json:"createdAt"`
-	UpdatedAt      string `json:"updatedAt"`
-	PushedAt       string `json:"pushedAt"`
-	History        struct {
+	Forks          struct {
+		TotalCount int `json:"totalCount"`
+	} `json:"forks"`
+	CreatedAt string `json:"createdAt"`
+	UpdatedAt string `json:"updatedAt"`
+	PushedAt  string `json:"pushedAt"`
+	History   struct {
 		TotalCount int `json:"totalCount"`
 	} `json:"history"`
-	Files          []graphQLGistFile `json:"files"`
-	Comments       struct {
+	Files    []graphQLGistFile `json:"files"`
+	Comments struct {
 		Nodes []graphQLGistComment `json:"nodes"`
 	} `json:"comments"`
 }
@@ -373,8 +503,34 @@ func parseUserDataResponse(body []byte, login string) (*models.UserData, error) 
 	}
 
 	user := response.Data.User
+
+	// Build profile
+	profile := models.UserProfile{
+		Login:           user.Login,
+		Name:            user.Name,
+		Bio:             user.Bio,
+		Company:         user.Company,
+		Location:        user.Location,
+		Email:           user.Email,
+		WebsiteURL:      user.WebsiteUrl,
+		TwitterUsername: user.TwitterUsername,
+		Pronouns:        user.Pronouns,
+		AvatarURL:       user.AvatarUrl,
+		FollowerCount:   user.Followers.TotalCount,
+		FollowingCount:  user.Following.TotalCount,
+		CreatedAt:       user.CreatedAt,
+	}
+	for _, sa := range user.SocialAccounts.Nodes {
+		profile.SocialAccounts = append(profile.SocialAccounts, models.SocialAccount{
+			Provider:    sa.Provider,
+			DisplayName: sa.DisplayName,
+			URL:         sa.URL,
+		})
+	}
+
 	userData := &models.UserData{
-		Login: user.Login,
+		Login:   user.Login,
+		Profile: profile,
 	}
 
 	// Convert repositories
@@ -382,6 +538,14 @@ func parseUserDataResponse(body []byte, login string) (*models.UserData, error) 
 		commitCount := 0
 		if repo.DefaultBranchRef != nil && repo.DefaultBranchRef.Target.History != nil {
 			commitCount = repo.DefaultBranchRef.Target.History.TotalCount
+		}
+		primaryLang := ""
+		if repo.PrimaryLanguage != nil {
+			primaryLang = repo.PrimaryLanguage.Name
+		}
+		licenseName := ""
+		if repo.LicenseInfo != nil {
+			licenseName = repo.LicenseInfo.Name
 		}
 		userData.Repositories = append(userData.Repositories, models.UserRepository{
 			GitHubLogin:      login,
@@ -400,6 +564,8 @@ func parseUserDataResponse(body []byte, login string) (*models.UserData, error) 
 			IsInOrganization: repo.IsInOrganization,
 			HasWikiEnabled:   repo.HasWikiEnabled,
 			Visibility:       repo.Visibility,
+			PrimaryLanguage:  primaryLang,
+			LicenseName:      licenseName,
 			CreatedAt:        repo.CreatedAt,
 			UpdatedAt:        repo.UpdatedAt,
 			PushedAt:         repo.PushedAt,
@@ -418,6 +584,7 @@ func parseUserDataResponse(body []byte, login string) (*models.UserData, error) 
 			IsPublic:       gist.IsPublic,
 			IsFork:         gist.IsFork,
 			StargazerCount: gist.StargazerCount,
+			ForkCount:      gist.Forks.TotalCount,
 			RevisionCount:  gist.History.TotalCount,
 			CreatedAt:      gist.CreatedAt,
 			UpdatedAt:      gist.UpdatedAt,

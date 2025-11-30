@@ -93,6 +93,23 @@ Project databases (`.db` files) are created in your current working directory.
 
 The original Python implementation is available in the `legacy_python/` directory.
 
+## Contributing
+
+### TUI Development
+
+When working on TUI components, **you MUST follow the [Width Management Style Guide](STYLE_GUIDE.md)**. This is the **source of truth** for all layout and width calculations in the terminal UI.
+
+**THE ONE RULE:** All content inside borders must be exactly `InnerWidth` chars wide.
+
+Key requirements:
+- All borders use `BorderStyle.Width(ViewportWidth)` with NO `.Padding()`
+- All dividers use `strings.Repeat("─", InnerWidth)`
+- All selectors use `.Width(InnerWidth)`
+- All padding calculations use `InnerWidth - len(content)`
+- NEVER calculate widths manually
+
+See [STYLE_GUIDE.md](STYLE_GUIDE.md) for complete details, examples, and the audit checklist.
+
 ## License
 
 See LICENSE file for details.

@@ -142,11 +142,13 @@ func (m ProjectSelectorModel) View() string {
 
 	var b strings.Builder
 
-	// Use centralized styles from styles.go
-	menuSelectedStyle := SelectedStyle.Padding(0, 1)
-	menuNormalStyle := NormalStyle.Padding(0, 1)
+	// Calculate layout for full-width items
+	// STYLE GUIDE: Use layout.InnerWidth for all content inside borders
+	layout := NewLayout(m.width)
 
 	b.WriteString(TitleStyle.Render("Select Project"))
+	b.WriteString("\n")
+	b.WriteString(strings.Repeat("─", layout.InnerWidth))
 	b.WriteString("\n\n")
 
 	if m.createMode {
@@ -165,9 +167,13 @@ func (m ProjectSelectorModel) View() string {
 				displayName := strings.TrimSuffix(proj, filepath.Ext(proj))
 				line := fmt.Sprintf("  %s", displayName)
 				if i == m.cursor {
-					b.WriteString(menuSelectedStyle.Render(line))
+					padding := layout.InnerWidth - len(line)
+					if padding > 0 {
+						line = line + strings.Repeat(" ", padding)
+					}
+					b.WriteString(SelectedStyle.Render(line))
 				} else {
-					b.WriteString(menuNormalStyle.Render(line))
+					b.WriteString(NormalStyle.Render(line))
 				}
 				b.WriteString("\n")
 			}
@@ -177,18 +183,26 @@ func (m ProjectSelectorModel) View() string {
 		// Create New option
 		createLine := "  + Create New Project"
 		if m.cursor == len(m.projects) {
-			b.WriteString(menuSelectedStyle.Render(createLine))
+			padding := layout.InnerWidth - len(createLine)
+			if padding > 0 {
+				createLine = createLine + strings.Repeat(" ", padding)
+			}
+			b.WriteString(SelectedStyle.Render(createLine))
 		} else {
-			b.WriteString(menuNormalStyle.Render(createLine))
+			b.WriteString(NormalStyle.Render(createLine))
 		}
 		b.WriteString("\n")
 
 		// Exit option
 		exitLine := "  Exit"
 		if m.cursor == len(m.projects)+1 {
-			b.WriteString(menuSelectedStyle.Render(exitLine))
+			padding := layout.InnerWidth - len(exitLine)
+			if padding > 0 {
+				exitLine = exitLine + strings.Repeat(" ", padding)
+			}
+			b.WriteString(SelectedStyle.Render(exitLine))
 		} else {
-			b.WriteString(menuNormalStyle.Render(exitLine))
+			b.WriteString(NormalStyle.Render(exitLine))
 		}
 		b.WriteString("\n\n")
 
@@ -196,8 +210,7 @@ func (m ProjectSelectorModel) View() string {
 	}
 
 	// Use centralized border style with dynamic width from terminal and top margin
-	layout := NewLayout(m.width)
-	borderStyle := BorderStyle.Padding(1, 2).Width(layout.ViewportWidth).MarginTop(1)
+	borderStyle := BorderStyle.Width(layout.ViewportWidth).MarginTop(1)
 
 	return borderStyle.Render(b.String())
 }

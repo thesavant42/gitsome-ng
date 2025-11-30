@@ -10,8 +10,10 @@ import (
 	"github.com/thesavant42/gitsome-ng/internal/db"
 	"github.com/thesavant42/gitsome-ng/internal/models"
 
+	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -46,7 +48,6 @@ type userQueryCompleteMsg struct {
 	err   error
 }
 
-
 // Color palette for link groups - use from styles.go
 // (keeping local reference for compatibility)
 var linkColors = LinkColors
@@ -71,6 +72,8 @@ type gistFileEntry struct {
 	Size          int
 	RevisionCount int
 	UpdatedAt     string
+	IsDivider     bool // true for divider rows (gist header)
+	FileCount     int  // number of files in this gist (for divider display)
 }
 
 // TUIModel holds the state for the interactive table
@@ -135,17 +138,52 @@ type TUIModel struct {
 	queryFailed        int      // users that failed
 	queryLoginsToFetch []string // logins remaining to fetch
 
+	// Progress bar state
+	progressBar     progress.Model // animated progress bar component
+	showProgress    bool           // flag to show/hide progress bar
+	progressPercent float64        // current progress percentage (0.0 to 1.0)
+	progressLabel   string         // descriptive label for current operation
+
 	// User detail view state
-	userDetailVisible bool                    // showing user detail view
-	selectedUserLogin string                  // which user we're viewing
-	userRepos         []models.UserRepository // repos for selected user
-	userGists         []models.UserGist       // gists for selected user
-	userGistFiles     []gistFileEntry         // flattened gist files for display
-	userDetailTab     int                     // 0 = repos, 1 = gists/files
-	userDetailCursor  int                     // cursor position in detail view
+	userDetailVisible   bool                    // showing user detail view
+	selectedUserLogin   string                  // which user we're viewing
+	selectedUserEmail   string                  // email from commits (if available)
+	selectedUserName    string                  // name from commits (if available)
+	selectedUserProfile models.UserProfile      // full profile from DB
+	userRepos           []models.UserRepository // repos for selected user
+	userGists           []models.UserGist       // gists for selected user
+	userGistFiles       []gistFileEntry         // flattened gist files for display
+	userDetailTab       int                     // 0 = repos, 1 = gists/files
+	userDetailCursor    int                     // cursor position in detail view
 
 	// Processed users cache - logins with fetched data show [!] instead of [x]
 	processedLogins map[string]bool
+
+	// Delete confirmation state
+	deleteConfirmVisible bool
+	deleteConfirmForm    *huh.Form
+	deleteTargetIndex    int    // row index to delete
+	deleteTargetType     string // "committer", "repo", "gist"
+
+	// Edit form state
+	editFormVisible bool
+	editForm        *huh.Form
+	editTargetIndex int    // row index being edited
+	editTargetType  string // "committer", "profile"
+	editLoginValue  string // temp storage for form values
+	editNameValue   string
+}
+
+// isServiceAccount returns true if the user is a service account that cannot be scanned
+// (either no login, or the GitHub web-flow service account)
+func isServiceAccount(login, email string) bool {
+	if login == "" {
+		return true
+	}
+	if login == "web-flow" && email == "noreply@github.com" {
+		return true
+	}
+	return false
 }
 
 // NewTUIModel creates a new interactive table model
@@ -179,8 +217,11 @@ func NewTUIModel(
 	rows := make([]table.Row, len(stats))
 	for i, s := range stats {
 		tagMark := "[ ]"
-		// Check if user has been processed (data fetched) - shows [!]
-		if s.GitHubLogin != "" && processedLogins[s.GitHubLogin] {
+		// Service accounts (no login or web-flow) cannot be scanned, show [-]
+		if isServiceAccount(s.GitHubLogin, s.Email) {
+			tagMark = "[-]"
+		} else if processedLogins[s.GitHubLogin] {
+			// Has login and processed (data fetched) - shows [!]
 			tagMark = "[!]"
 		} else if tags[s.Email] {
 			tagMark = "[x]"
@@ -214,7 +255,7 @@ func NewTUIModel(
 	s := table.DefaultStyles()
 	s.Header = s.Header.
 		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(ColorBorder).
+		BorderForeground(ColorText).
 		BorderBottom(true).
 		Bold(true).
 		Foreground(ColorText)
@@ -234,6 +275,14 @@ func NewTUIModel(
 		domainList = append(domainList, domain)
 	}
 
+	// Initialize progress bar with red from style guide
+	layout := DefaultLayout()
+	prog := progress.New(
+		progress.WithSolidFill(string(ColorText)), // bright white fill (15)
+		progress.WithWidth(layout.ContentWidth-4),
+	)
+	prog.EmptyColor = string(ColorTextDim) // gray background (241) for empty portion
+
 	return TUIModel{
 		table:            t,
 		stats:            stats,
@@ -249,6 +298,10 @@ func NewTUIModel(
 		cached:           cached,
 		processedLogins:  processedLogins,
 		layout:           DefaultLayout(),
+		progressBar:      prog,
+		showProgress:     false,
+		progressPercent:  0.0,
+		progressLabel:    "",
 	}
 }
 
@@ -265,16 +318,47 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Handle window resize
 	case tea.WindowSizeMsg:
 		m.layout = NewLayout(msg.Width)
+		m.progressBar.Width = m.layout.ContentWidth - 4
 		return m, nil
+
+	// Handle progress bar frame messages for animation
+	case progress.FrameMsg:
+		progressModel, cmd := m.progressBar.Update(msg)
+		m.progressBar = progressModel.(progress.Model)
+		return m, cmd
 
 	// Handle async fetch messages
 	case fetchProgressMsg:
 		m.fetchProgress = fmt.Sprintf("Fetching commits... %d fetched (page %d)", msg.fetched, msg.page)
-		return m, nil
+		// Show progress bar during fetch (indeterminate progress since we don't know total)
+		m.showProgress = true
+		m.progressLabel = fmt.Sprintf("Fetching commits... page %d", msg.page)
+		// Use a pulsing effect by setting a moderate progress value
+		m.progressPercent = 0.5
+		// SetPercent returns a command that triggers animation
+		return m, m.progressBar.SetPercent(m.progressPercent)
 
 	case fetchCompleteMsg:
 		m.fetchingRepo = nil
 		m.fetchProgress = ""
+
+		// Hide progress bar on completion
+		m.showProgress = false
+		m.progressPercent = 0.0
+		m.progressLabel = ""
+
+		// Log API call to database
+		if m.database != nil {
+			endpoint := fmt.Sprintf("/repos/%s/%s/commits", msg.owner, msg.name)
+			errorMsg := ""
+			statusCode := 200
+			if msg.err != nil {
+				errorMsg = msg.err.Error()
+				statusCode = 0
+			}
+			m.database.SaveAPILog("GET", endpoint, statusCode, errorMsg, 0, "", "")
+		}
+
 		if msg.err != nil {
 			// Show error message to user
 			m.exportMessage = fmt.Sprintf("Fetch failed: %v", msg.err)
@@ -290,6 +374,8 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				records[i] = c.ToRecord(msg.owner, msg.name)
 			}
 			m.database.InsertCommits(records)
+			// Ensure repo is tracked in database
+			m.database.AddTrackedRepo(msg.owner, msg.name)
 		}
 		// Switch to the newly fetched repo
 		for i, repo := range m.repos {
@@ -303,14 +389,37 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case userQueryProgressMsg:
 		m.queryProgress = fmt.Sprintf("Querying %s... (%d/%d)", msg.login, msg.progress, msg.total)
-		return m, nil
+		// Show progress bar with actual percentage
+		m.showProgress = true
+		m.progressPercent = float64(msg.progress) / float64(msg.total)
+		m.progressLabel = fmt.Sprintf("Querying users... %d/%d", msg.progress, msg.total)
+		// SetPercent returns a command that triggers animation
+		return m, m.progressBar.SetPercent(m.progressPercent)
 
 	case userQueryCompleteMsg:
 		m.queryCompleted++
-		if msg.err != nil {
-			m.queryFailed++
-		} else if msg.data != nil && m.database != nil {
+
+		// Update progress bar
+		m.progressPercent = float64(m.queryCompleted) / float64(m.queryTotal)
+		m.progressLabel = fmt.Sprintf("Querying users... %d/%d", m.queryCompleted, m.queryTotal)
+		m.queryProgress = fmt.Sprintf("Completed %d/%d users", m.queryCompleted, m.queryTotal)
+
+		// Log API call to database
+		if m.database != nil {
+			endpoint := "https://api.github.com/graphql"
+			errorMsg := ""
+			statusCode := 200
+			if msg.err != nil {
+				errorMsg = msg.err.Error()
+				statusCode = 0
+				m.queryFailed++
+			}
+			m.database.SaveAPILog("POST", endpoint, statusCode, errorMsg, 0, "", msg.login)
+		}
+
+		if msg.err == nil && msg.data != nil && m.database != nil {
 			// Save user data to database
+			m.database.SaveUserProfile(msg.data.Profile)
 			m.database.SaveUserRepositories(msg.data.Repositories)
 			m.database.SaveUserGists(msg.data.Gists)
 			// Mark this login as processed so it shows [!] instead of [x]
@@ -323,15 +432,68 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.queryLoginsToFetch) > 0 {
 			login := m.queryLoginsToFetch[0]
 			m.queryLoginsToFetch = m.queryLoginsToFetch[1:]
-			return m, m.startUserQuery(login, m.queryCompleted+1, m.queryTotal)
+			// Update progress bar and start next query
+			cmd := m.progressBar.SetPercent(m.progressPercent)
+			return m, tea.Batch(cmd, m.startUserQuery(login, m.queryCompleted+1, m.queryTotal))
 		}
 		// All done - update rows to reflect new [!] indicators
 		m.queryingUsers = false
 		m.queryProgress = ""
+
+		// Hide progress bar on completion
+		m.showProgress = false
+		m.progressPercent = 0.0
+		m.progressLabel = ""
+
 		m.updateRows()
 		m.exportMessage = fmt.Sprintf("Queried %d users (%d succeeded, %d failed)", m.queryTotal, m.queryTotal-m.queryFailed, m.queryFailed)
 		return m, nil
 
+	}
+
+	// Handle delete confirmation form (needs all msg types, not just KeyMsg)
+	if m.deleteConfirmVisible && m.deleteConfirmForm != nil {
+		form, cmd := m.deleteConfirmForm.Update(msg)
+		if f, ok := form.(*huh.Form); ok {
+			m.deleteConfirmForm = f
+		}
+
+		switch m.deleteConfirmForm.State {
+		case huh.StateCompleted:
+			m.deleteConfirmVisible = false
+			// Check if user confirmed
+			confirm := m.deleteConfirmForm.GetBool("confirm")
+			if confirm {
+				m.executeDelete()
+			}
+			return m, nil
+		case huh.StateAborted:
+			m.deleteConfirmVisible = false
+			return m, nil
+		}
+		return m, cmd
+	}
+
+	// Handle edit form (needs all msg types, not just KeyMsg)
+	if m.editFormVisible && m.editForm != nil {
+		form, cmd := m.editForm.Update(msg)
+		if f, ok := form.(*huh.Form); ok {
+			m.editForm = f
+		}
+
+		switch m.editForm.State {
+		case huh.StateCompleted:
+			m.editFormVisible = false
+			m.executeEdit()
+			return m, nil
+		case huh.StateAborted:
+			m.editFormVisible = false
+			return m, nil
+		}
+		return m, cmd
+	}
+
+	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		// Clear export message on any key press
 		if m.exportMessage != "" {
@@ -346,7 +508,13 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.fetchPromptRepo = nil
 				m.fetchingRepo = repo
 				m.fetchProgress = "Starting fetch..."
-				return m, m.startFetch(repo.Owner, repo.Name)
+				// Show progress bar from the start
+				m.showProgress = true
+				m.progressPercent = 0.5 // Indeterminate progress for fetching
+				m.progressLabel = "Fetching commits..."
+				// Trigger animation and start fetch
+				cmd := m.progressBar.SetPercent(m.progressPercent)
+				return m, tea.Batch(cmd, m.startFetch(repo.Owner, repo.Name))
 			case "n", "N", "esc":
 				m.fetchPromptRepo = nil
 				return m, nil
@@ -489,35 +657,54 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "t", "T":
 			// Toggle tag / clear processed status
+			// Tags ALL rows with same GitHub login
+			// Service accounts cannot be scanned (show [-])
 			cursor := m.table.Cursor()
 			if cursor >= 0 && cursor < len(m.stats) {
 				email := m.stats[cursor].Email
 				login := m.stats[cursor].GitHubLogin
 
+				// Service accounts cannot be scanned, do nothing
+				if isServiceAccount(login, email) {
+					return m, nil
+				}
+
 				// If user is processed [!], pressing T clears their data for re-scan
-				if login != "" && m.processedLogins[login] {
+				if m.processedLogins[login] {
 					// Clear processed status and user data
 					delete(m.processedLogins, login)
 					if m.database != nil {
 						m.database.DeleteUserRepositories(login)
 						m.database.DeleteUserGists(login)
 					}
-					// Keep them tagged [x] so they can be re-scanned
-					m.tags[email] = true
-					if m.database != nil {
-						m.database.SaveTag(m.repoOwner, m.repoName, email)
+					// Tag all rows with same login so they can be re-scanned
+					for _, s := range m.stats {
+						if s.GitHubLogin == login {
+							m.tags[s.Email] = true
+							if m.database != nil {
+								m.database.SaveTag(m.repoOwner, m.repoName, s.Email)
+							}
+						}
 					}
 				} else if m.tags[email] {
-					// Currently tagged [x] -> untag [ ]
-					delete(m.tags, email)
-					if m.database != nil {
-						m.database.RemoveTag(m.repoOwner, m.repoName, email)
+					// Currently tagged [x] -> untag ALL rows with same login
+					for _, s := range m.stats {
+						if s.GitHubLogin == login {
+							delete(m.tags, s.Email)
+							if m.database != nil {
+								m.database.RemoveTag(m.repoOwner, m.repoName, s.Email)
+							}
+						}
 					}
 				} else {
-					// Currently untagged [ ] -> tag [x]
-					m.tags[email] = true
-					if m.database != nil {
-						m.database.SaveTag(m.repoOwner, m.repoName, email)
+					// Currently untagged [ ] -> tag ALL rows with same login
+					for _, s := range m.stats {
+						if s.GitHubLogin == login {
+							m.tags[s.Email] = true
+							if m.database != nil {
+								m.database.SaveTag(m.repoOwner, m.repoName, s.Email)
+							}
+						}
 					}
 				}
 				// Update rows to reflect tag change
@@ -541,14 +728,67 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// View user detail if user has a GitHub login and data exists
 			cursor := m.table.Cursor()
 			if cursor >= 0 && cursor < len(m.stats) {
-				login := m.stats[cursor].GitHubLogin
-				if login != "" && m.database != nil {
+				s := m.stats[cursor]
+				if s.GitHubLogin != "" && m.database != nil {
 					// Check if user has data
-					hasData, _ := m.database.UserHasData(login)
+					hasData, _ := m.database.UserHasData(s.GitHubLogin)
 					if hasData {
-						m.showUserDetail(login)
+						m.showUserDetail(s.GitHubLogin, s.Name, s.Email)
 					}
 				}
+			}
+			return m, nil
+
+		case "d", "D", "delete":
+			// Delete selected committer row with confirmation
+			cursor := m.table.Cursor()
+			if cursor >= 0 && cursor < len(m.stats) {
+				s := m.stats[cursor]
+				m.deleteTargetIndex = cursor
+				m.deleteTargetType = "committer"
+
+				m.deleteConfirmForm = huh.NewForm(
+					huh.NewGroup(
+						huh.NewConfirm().
+							Key("confirm").
+							Title(fmt.Sprintf("Delete committer '%s' (%s)?", s.Name, s.Email)).
+							Description("This will remove the committer from the database.").
+							Affirmative("Yes, delete").
+							Negative("Cancel"),
+					),
+				).WithTheme(NewAppTheme())
+
+				m.deleteConfirmVisible = true
+				return m, m.deleteConfirmForm.Init()
+			}
+			return m, nil
+
+		case "e", "E":
+			// Edit selected committer row
+			cursor := m.table.Cursor()
+			if cursor >= 0 && cursor < len(m.stats) {
+				s := m.stats[cursor]
+				m.editTargetIndex = cursor
+				m.editTargetType = "committer"
+				m.editLoginValue = s.GitHubLogin
+				m.editNameValue = s.Name
+
+				m.editForm = huh.NewForm(
+					huh.NewGroup(
+						huh.NewInput().
+							Key("login").
+							Title("GitHub Login").
+							Description("GitHub username (leave empty to unlink)").
+							Value(&m.editLoginValue),
+						huh.NewInput().
+							Key("name").
+							Title("Display Name").
+							Value(&m.editNameValue),
+					),
+				).WithTheme(NewAppTheme())
+
+				m.editFormVisible = true
+				return m, m.editForm.Init()
 			}
 			return m, nil
 		}
@@ -601,11 +841,17 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				} else {
 					// Filter out already processed users (those showing [!])
 					var logins []string
+					seenLogins := make(map[string]bool)
 					for _, u := range taggedUsers {
 						// Skip users who have already been processed
 						if m.processedLogins != nil && m.processedLogins[u.GitHubLogin] {
 							continue
 						}
+						// Skip duplicate logins (user may have multiple tagged emails)
+						if seenLogins[u.GitHubLogin] {
+							continue
+						}
+						seenLogins[u.GitHubLogin] = true
 						logins = append(logins, u.GitHubLogin)
 					}
 					if len(logins) == 0 {
@@ -616,10 +862,16 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 						m.queryTotal = len(logins)
 						m.queryCompleted = 0
 						m.queryFailed = 0
+						// Show progress bar from the start
+						m.showProgress = true
+						m.progressPercent = 0.0
+						m.progressLabel = fmt.Sprintf("Querying users... 0/%d", len(logins))
 						if len(logins) > 1 {
 							m.queryLoginsToFetch = logins[1:]
 						}
-						return m, m.startUserQuery(logins[0], 1, m.queryTotal)
+						// Trigger animation and start query
+						cmd := m.progressBar.SetPercent(m.progressPercent)
+						return m, tea.Batch(cmd, m.startUserQuery(logins[0], 1, m.queryTotal))
 					}
 				}
 			} else if m.token == "" {
@@ -935,8 +1187,11 @@ func (m *TUIModel) rebuildTable() {
 	rows := make([]table.Row, len(m.stats))
 	for i, s := range m.stats {
 		tagMark := "[ ]"
-		// Check if user has been processed (data fetched) - shows [!]
-		if s.GitHubLogin != "" && m.processedLogins[s.GitHubLogin] {
+		// Service accounts (no login or web-flow) cannot be scanned, show [-]
+		if isServiceAccount(s.GitHubLogin, s.Email) {
+			tagMark = "[-]"
+		} else if m.processedLogins[s.GitHubLogin] {
+			// Has login and processed (data fetched) - shows [!]
 			tagMark = "[!]"
 		} else if m.tags[s.Email] {
 			tagMark = "[x]"
@@ -968,7 +1223,7 @@ func (m *TUIModel) rebuildTable() {
 	s := table.DefaultStyles()
 	s.Header = s.Header.
 		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(ColorBorder).
+		BorderForeground(ColorText).
 		BorderBottom(true).
 		Bold(true).
 		Foreground(ColorText)
@@ -989,7 +1244,12 @@ func (m *TUIModel) startFetch(owner, name string) tea.Cmd {
 			return fetchCompleteMsg{owner: owner, name: name, err: fmt.Errorf("no GitHub token")}
 		}
 
-		client := api.NewClient(m.token)
+		var client *api.Client
+		if m.dbPath != "" {
+			client = api.NewClientWithLogging(m.token, m.dbPath)
+		} else {
+			client = api.NewClient(m.token)
+		}
 
 		// Get latest SHA for incremental fetch
 		var latestSHA string
@@ -1013,7 +1273,13 @@ func (m *TUIModel) startUserQuery(login string, _, _ int) tea.Cmd {
 			return userQueryCompleteMsg{login: login, err: fmt.Errorf("no GitHub token")}
 		}
 
-		client := api.NewClient(m.token)
+		var client *api.Client
+		if m.dbPath != "" {
+			client = api.NewClientWithLogging(m.token, m.dbPath)
+		} else {
+			client = api.NewClient(m.token)
+		}
+
 		userData, err := client.FetchUserReposAndGists(login)
 		if err != nil {
 			return userQueryCompleteMsg{login: login, err: err}
@@ -1030,24 +1296,54 @@ func (m TUIModel) handleUserDetailView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.userDetailVisible = false
 		return m, nil
 
-	case "tab", "left", "right", "h", "l":
-		// Toggle between repos and gists tabs
-		m.userDetailTab = (m.userDetailTab + 1) % 2
+	case "tab", "right", "l":
+		// Cycle forward: Profile(0) -> Repos(1) -> Gists(2) -> Profile(0)
+		m.userDetailTab = (m.userDetailTab + 1) % 3
+		m.userDetailCursor = 0
+		return m, nil
+
+	case "left", "h":
+		// Cycle backward: Profile(0) <- Repos(1) <- Gists(2)
+		m.userDetailTab = (m.userDetailTab + 2) % 3
 		m.userDetailCursor = 0
 		return m, nil
 
 	case "up", "k":
-		if m.userDetailCursor > 0 {
+		// Tab 0 is Profile (no list), Tab 1 is Repos, Tab 2 is Gists
+		if m.userDetailTab == 2 {
+			// Skip dividers when navigating gists
+			for {
+				if m.userDetailCursor <= 0 {
+					break
+				}
+				m.userDetailCursor--
+				if !m.userGistFiles[m.userDetailCursor].IsDivider {
+					break
+				}
+			}
+		} else if m.userDetailTab > 0 && m.userDetailCursor > 0 {
 			m.userDetailCursor--
 		}
 		return m, nil
 
 	case "down", "j":
 		maxItems := 0
-		if m.userDetailTab == 0 {
+		switch m.userDetailTab {
+		case 1:
 			maxItems = len(m.userRepos)
-		} else {
+		case 2:
 			maxItems = len(m.userGistFiles)
+			// Skip dividers when navigating gists
+			for {
+				if m.userDetailCursor >= maxItems-1 {
+					break
+				}
+				m.userDetailCursor++
+				if !m.userGistFiles[m.userDetailCursor].IsDivider {
+					break
+				}
+			}
+			return m, nil
 		}
 		if m.userDetailCursor < maxItems-1 {
 			m.userDetailCursor++
@@ -1055,17 +1351,98 @@ func (m TUIModel) handleUserDetailView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "enter":
-		// Open selected repo or gist in browser
-		if m.userDetailTab == 0 && m.userDetailCursor < len(m.userRepos) {
+		// Tab 0: Profile - open GitHub profile
+		if m.userDetailTab == 0 {
+			if m.selectedUserLogin != "" {
+				profileURL := fmt.Sprintf("https://github.com/%s", m.selectedUserLogin)
+				openURL(profileURL)
+			}
+			return m, nil
+		}
+		// Tab 1: Repos - open selected repo in browser
+		if m.userDetailTab == 1 && m.userDetailCursor < len(m.userRepos) {
 			repo := m.userRepos[m.userDetailCursor]
 			if repo.URL != "" {
 				openURL(repo.URL)
 			}
-		} else if m.userDetailTab == 1 && m.userDetailCursor < len(m.userGistFiles) {
+		}
+		// Tab 2: Gists - open selected gist file in browser
+		if m.userDetailTab == 2 && m.userDetailCursor < len(m.userGistFiles) {
 			file := m.userGistFiles[m.userDetailCursor]
-			if file.GistURL != "" {
-				openURL(file.GistURL)
+			if !file.IsDivider && file.GistURL != "" {
+				// Construct file-specific URL: base_gist_url#file-filename-ext
+				fileURL := file.GistURL
+				if file.FileName != "" {
+					// GitHub gist file anchor format: #file-name-with-dashes-extension
+					anchor := strings.ReplaceAll(file.FileName, ".", "-")
+					anchor = strings.ReplaceAll(anchor, "_", "-")
+					anchor = strings.ToLower(anchor)
+					fileURL = fileURL + "#file-" + anchor
+				}
+				openURL(fileURL)
 			}
+		}
+		return m, nil
+
+	case "p":
+		// Open user's GitHub profile page
+		if m.selectedUserLogin != "" {
+			profileURL := fmt.Sprintf("https://github.com/%s", m.selectedUserLogin)
+			openURL(profileURL)
+		}
+		return m, nil
+
+	case "d", "D", "delete":
+		// Delete selected repo or gist
+		if m.userDetailTab == 1 && m.userDetailCursor < len(m.userRepos) {
+			// Delete repo
+			repo := m.userRepos[m.userDetailCursor]
+			m.deleteTargetIndex = m.userDetailCursor
+			m.deleteTargetType = "repo"
+
+			m.deleteConfirmForm = huh.NewForm(
+				huh.NewGroup(
+					huh.NewConfirm().
+						Key("confirm").
+						Title(fmt.Sprintf("Delete repository '%s'?", repo.Name)).
+						Description("This will remove the repository from the database.").
+						Affirmative("Yes, delete").
+						Negative("Cancel"),
+				),
+			).WithTheme(NewAppTheme())
+
+			m.deleteConfirmVisible = true
+			return m, m.deleteConfirmForm.Init()
+
+		} else if m.userDetailTab == 2 && m.userDetailCursor < len(m.userGistFiles) {
+			// Delete gist
+			gf := m.userGistFiles[m.userDetailCursor]
+			m.deleteTargetIndex = m.userDetailCursor
+			m.deleteTargetType = "gist"
+
+			// Different message for divider row vs file row
+			var title, desc string
+			if gf.IsDivider {
+				title = fmt.Sprintf("Delete entire gist %s?", gf.GistID[:12])
+				desc = fmt.Sprintf("This will remove all %d files from this gist.", gf.FileCount)
+			} else {
+				title = fmt.Sprintf("Delete gist '%s'?", gf.FileName)
+				desc = "This will remove all files from this gist."
+			}
+
+			m.deleteConfirmForm = huh.NewForm(
+				huh.NewGroup(
+					huh.NewConfirm().
+						Key("confirm").
+						Title(title).
+						Description(desc).
+						Affirmative("Yes, delete").
+						Negative("Cancel"),
+				),
+			).WithTheme(NewAppTheme())
+
+			m.deleteConfirmVisible = true
+			return m, m.deleteConfirmForm.Init()
 		}
 		return m, nil
 	}
@@ -1074,10 +1451,21 @@ func (m TUIModel) handleUserDetailView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // showUserDetail loads user data and shows the detail view
-func (m *TUIModel) showUserDetail(login string) {
+func (m *TUIModel) showUserDetail(login, name, email string) {
 	if m.database == nil {
 		return
 	}
+
+	// Store user info from commits
+	m.selectedUserName = name
+	m.selectedUserEmail = email
+
+	// Load user profile from DB
+	profile, err := m.database.GetUserProfile(login)
+	if err != nil {
+		profile = models.UserProfile{Login: login}
+	}
+	m.selectedUserProfile = profile
 
 	// Load repos
 	repos, err := m.database.GetUserRepositories(login)
@@ -1091,10 +1479,25 @@ func (m *TUIModel) showUserDetail(login string) {
 		gists = []models.UserGist{}
 	}
 
-	// Build flattened list of gist files
+	// Build flattened list of gist files with dividers
 	var gistFiles []gistFileEntry
 	for _, gist := range gists {
 		files, err := m.database.GetGistFiles(gist.ID)
+		fileCount := len(files)
+		if err != nil || fileCount == 0 {
+			fileCount = 1 // placeholder
+		}
+
+		// Insert divider row first
+		gistFiles = append(gistFiles, gistFileEntry{
+			GistURL:       gist.URL,
+			GistID:        gist.ID,
+			RevisionCount: gist.RevisionCount,
+			UpdatedAt:     gist.UpdatedAt,
+			IsDivider:     true,
+			FileCount:     fileCount,
+		})
+
 		if err != nil || len(files) == 0 {
 			// Show gist with no files as a placeholder entry
 			gistFiles = append(gistFiles, gistFileEntry{
@@ -1130,13 +1533,149 @@ func (m *TUIModel) showUserDetail(login string) {
 	m.userDetailVisible = true
 }
 
+// executeDelete performs the actual delete operation after confirmation
+func (m *TUIModel) executeDelete() {
+	switch m.deleteTargetType {
+	case "committer":
+		if m.deleteTargetIndex >= 0 && m.deleteTargetIndex < len(m.stats) {
+			s := m.stats[m.deleteTargetIndex]
+
+			// Remove from database
+			if m.database != nil {
+				m.database.DeleteCommitterByEmail(m.repoOwner, m.repoName, s.Email)
+			}
+
+			// Remove from in-memory stats
+			m.stats = append(m.stats[:m.deleteTargetIndex], m.stats[m.deleteTargetIndex+1:]...)
+
+			// Clean up related data
+			delete(m.tags, s.Email)
+			delete(m.links, s.Email)
+
+			// Update table
+			m.updateRows()
+			m.exportMessage = fmt.Sprintf("Deleted committer: %s", s.Email)
+		}
+
+	case "repo":
+		if m.deleteTargetIndex >= 0 && m.deleteTargetIndex < len(m.userRepos) {
+			repo := m.userRepos[m.deleteTargetIndex]
+
+			// Remove from database
+			if m.database != nil {
+				m.database.DeleteUserRepository(m.selectedUserLogin, repo.Name)
+			}
+
+			// Remove from in-memory list
+			m.userRepos = append(m.userRepos[:m.deleteTargetIndex], m.userRepos[m.deleteTargetIndex+1:]...)
+
+			// Adjust cursor if needed
+			if m.userDetailCursor >= len(m.userRepos) && m.userDetailCursor > 0 {
+				m.userDetailCursor--
+			}
+			m.exportMessage = fmt.Sprintf("Deleted repository: %s", repo.Name)
+		}
+
+	case "gist":
+		if m.deleteTargetIndex >= 0 && m.deleteTargetIndex < len(m.userGistFiles) {
+			gf := m.userGistFiles[m.deleteTargetIndex]
+
+			// Remove from database
+			if m.database != nil {
+				m.database.DeleteUserGist(m.selectedUserLogin, gf.GistID)
+			}
+
+			// Rebuild gist files list (remove all files from this gist)
+			var newFiles []gistFileEntry
+			for _, f := range m.userGistFiles {
+				if f.GistID != gf.GistID {
+					newFiles = append(newFiles, f)
+				}
+			}
+			m.userGistFiles = newFiles
+
+			// Also remove from userGists
+			var newGists []models.UserGist
+			for _, g := range m.userGists {
+				if g.ID != gf.GistID {
+					newGists = append(newGists, g)
+				}
+			}
+			m.userGists = newGists
+
+			// Adjust cursor if needed
+			if m.userDetailCursor >= len(m.userGistFiles) && m.userDetailCursor > 0 {
+				m.userDetailCursor--
+			}
+			m.exportMessage = fmt.Sprintf("Deleted gist: %s", gf.GistID)
+		}
+	}
+}
+
+// executeEdit applies the edit form values
+func (m *TUIModel) executeEdit() {
+	switch m.editTargetType {
+	case "committer":
+		if m.editTargetIndex >= 0 && m.editTargetIndex < len(m.stats) {
+			s := &m.stats[m.editTargetIndex]
+
+			// Update GitHub login (in-memory and update commits table)
+			oldLogin := s.GitHubLogin
+			newLogin := strings.TrimSpace(m.editLoginValue)
+			if newLogin != oldLogin {
+				s.GitHubLogin = newLogin
+
+				// Update github_committer_login in commits table
+				if m.database != nil {
+					m.database.UpdateCommitterLogin(m.repoOwner, m.repoName, s.Email, newLogin)
+				}
+
+				// Update processed status
+				if oldLogin != "" {
+					delete(m.processedLogins, oldLogin)
+				}
+				if newLogin != "" && m.database != nil {
+					if hasData, _ := m.database.UserHasData(newLogin); hasData {
+						m.processedLogins[newLogin] = true
+					}
+				}
+			}
+
+			// Update name (in-memory and update commits table)
+			newName := strings.TrimSpace(m.editNameValue)
+			if newName != s.Name {
+				s.Name = newName
+				if m.database != nil {
+					m.database.UpdateCommitterName(m.repoOwner, m.repoName, s.Email, newName)
+				}
+			}
+
+			m.updateRows()
+			m.exportMessage = fmt.Sprintf("Updated committer: %s", s.Email)
+		}
+
+	case "profile":
+		// Profile editing - update user profile fields
+		if m.database != nil && m.selectedUserLogin != "" {
+			profile := m.selectedUserProfile
+			// Values would be set from the form
+			// profile.TwitterUsername = m.editTwitterValue (etc.)
+			m.database.SaveUserProfile(profile)
+			m.exportMessage = fmt.Sprintf("Updated profile for: %s", m.selectedUserLogin)
+		}
+	}
+}
+
 // updateRows refreshes the table rows with current tag state
 func (m *TUIModel) updateRows() {
 	rows := make([]table.Row, len(m.stats))
 	for i, s := range m.stats {
 		tagMark := "[ ]"
-		// Check if user has been processed (data fetched) - shows [!]
-		if s.GitHubLogin != "" && m.processedLogins[s.GitHubLogin] {
+		// Service accounts (no login or web-flow) cannot be scanned, show [-]
+		if isServiceAccount(s.GitHubLogin, s.Email) {
+			tagMark = "[-]"
+		} else if m.processedLogins[s.GitHubLogin] {
+			// Has login and processed (data fetched) - shows [!]
 			tagMark = "[!]"
 		} else if m.tags[s.Email] {
 			tagMark = "[x]"
@@ -1164,6 +1703,16 @@ func (m *TUIModel) updateRows() {
 func (m TUIModel) View() string {
 	if m.quitting {
 		return ""
+	}
+
+	// Show delete confirmation form if visible
+	if m.deleteConfirmVisible && m.deleteConfirmForm != nil {
+		return m.renderFormOverlay(m.deleteConfirmForm.View(), "Delete Confirmation")
+	}
+
+	// Show edit form if visible
+	if m.editFormVisible && m.editForm != nil {
+		return m.renderFormOverlay(m.editForm.View(), "Edit Row")
 	}
 
 	// Show fetch prompt if pending
@@ -1222,6 +1771,21 @@ func (m TUIModel) View() string {
 		Render(tableView)
 	b.WriteString(borderedTable)
 	b.WriteString("\n")
+
+	// Render progress bar if active
+	if m.showProgress {
+		// Render label above progress bar
+		if m.progressLabel != "" {
+			label := NormalStyle.Render(m.progressLabel)
+			b.WriteString(" " + label)
+			b.WriteString("\n")
+		}
+
+		// Render the progress bar
+		progressView := m.progressBar.ViewAs(m.progressPercent)
+		b.WriteString(" " + progressView)
+		b.WriteString("\n")
+	}
 
 	// Footer: stats on left, help in center, total commits on right
 	if m.helpVisible {
@@ -1341,23 +1905,18 @@ func (m TUIModel) renderPageIndicator() string {
 		activeIdx = m.currentRepoIndex
 	}
 
-	// Calculate visible range
-	startIdx := 0
-	endIdx := len(tabs)
-
 	// Calculate total width of all tabs
 	totalWidth := 0
 	for _, t := range tabs {
 		totalWidth += t.width
 	}
 
-	// If tabs fit, show all
-	if totalWidth <= availableWidth {
-		startIdx = 0
-		endIdx = len(tabs)
-	} else {
-		// Need to scroll - keep active tab visible
-		// Start from active and expand in both directions
+	// Calculate visible range - default to showing all tabs
+	var startIdx, endIdx int
+
+	// If tabs don't fit, scroll to keep active tab visible
+	if totalWidth > availableWidth {
+		// Need to scroll - keep active tab visible, start from active and expand in both directions
 		startIdx = activeIdx
 		endIdx = activeIdx + 1
 		currentWidth := tabs[activeIdx].width
@@ -1381,6 +1940,10 @@ func (m TUIModel) renderPageIndicator() string {
 				break
 			}
 		}
+	} else {
+		// All tabs fit, show them all
+		startIdx = 0
+		endIdx = len(tabs)
 	}
 
 	// Build the tab bar
@@ -1448,7 +2011,21 @@ func (m TUIModel) renderAddRepo() string {
 	b.WriteString(HintStyle.Render("Enter: add repository | Esc: cancel"))
 
 	// Add border with width from layout
-	borderStyle := BorderStyle.Padding(1, 2).Width(m.layout.ViewportWidth).MarginTop(1)
+	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).MarginTop(1)
+
+	return borderStyle.Render(b.String())
+}
+
+// renderFormOverlay renders a huh form in a bordered overlay
+func (m TUIModel) renderFormOverlay(formView string, title string) string {
+	var b strings.Builder
+
+	b.WriteString(TitleStyle.Render(title))
+	b.WriteString("\n\n")
+	b.WriteString(formView)
+
+	// Add border with width from layout
+	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).MarginTop(1)
 
 	return borderStyle.Render(b.String())
 }
@@ -1469,7 +2046,7 @@ func (m TUIModel) renderFetchPrompt() string {
 	b.WriteString(HintStyle.Render("Y: Fetch commits | N/Esc: Skip"))
 
 	// Add border with width from layout
-	borderStyle := BorderStyle.Padding(1, 2).Width(m.layout.ViewportWidth).MarginTop(1)
+	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).MarginTop(1)
 
 	return borderStyle.Render(b.String())
 }
@@ -1484,6 +2061,13 @@ func (m TUIModel) renderQueryProgress() string {
 	b.WriteString(ProgressStyle.Render(m.queryProgress))
 	b.WriteString("\n\n")
 
+	// Render animated progress bar
+	if m.showProgress {
+		progressView := m.progressBar.ViewAs(m.progressPercent)
+		b.WriteString(progressView)
+		b.WriteString("\n\n")
+	}
+
 	b.WriteString(fmt.Sprintf("Completed: %d / %d", m.queryCompleted, m.queryTotal))
 	if m.queryFailed > 0 {
 		b.WriteString(fmt.Sprintf(" (Failed: %d)", m.queryFailed))
@@ -1492,7 +2076,6 @@ func (m TUIModel) renderQueryProgress() string {
 
 	// Add border with width from layout
 	borderStyle := BorderStyle.
-		Padding(1, 2).
 		Width(m.layout.ViewportWidth).
 		MarginTop(1)
 
@@ -1503,33 +2086,171 @@ func (m TUIModel) renderQueryProgress() string {
 func (m TUIModel) renderUserDetail() string {
 	var b strings.Builder
 
-	// Header with tabs on same line
-	b.WriteString(TitleStyle.Render("User: "))
-	b.WriteString(AccentStyle.Render(m.selectedUserLogin))
-	b.WriteString("    ") // spacing between username and tabs
+	// User label and profile tab (tab 0) - all on same line
+	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(ColorText).Render("User: "))
+	userInfo := m.selectedUserLogin
 	if m.userDetailTab == 0 {
+		b.WriteString(TabActiveStyle.Render(userInfo))
+	} else {
+		b.WriteString(TabInactiveStyle.Render(userInfo))
+	}
+	b.WriteString(" ")
+
+	// Repos tab (tab 1)
+	if m.userDetailTab == 1 {
 		b.WriteString(TabActiveStyle.Render(fmt.Sprintf("Repos (%d)", len(m.userRepos))))
 	} else {
 		b.WriteString(TabInactiveStyle.Render(fmt.Sprintf("Repos (%d)", len(m.userRepos))))
 	}
 	b.WriteString(" ")
-	if m.userDetailTab == 1 {
-		b.WriteString(TabActiveStyle.Render(fmt.Sprintf("Files (%d)", len(m.userGistFiles))))
+
+	// Gists tab (tab 2) - count dividers as gists (files are grouped under dividers)
+	gistCount := 0
+	for _, gf := range m.userGistFiles {
+		if gf.IsDivider {
+			gistCount++
+		}
+	}
+	if m.userDetailTab == 2 {
+		b.WriteString(TabActiveStyle.Render(fmt.Sprintf("Gists (%d)", gistCount)))
 	} else {
-		b.WriteString(TabInactiveStyle.Render(fmt.Sprintf("Files (%d)", len(m.userGistFiles))))
+		b.WriteString(TabInactiveStyle.Render(fmt.Sprintf("Gists (%d)", gistCount)))
 	}
 	b.WriteString("\n\n")
 
 	// Content based on active tab
 	if m.userDetailTab == 0 {
+		// Profile tab - show user info from DB profile + commit data
+		p := m.selectedUserProfile
+		b.WriteString(NormalStyle.Render("GitHub Profile"))
+		b.WriteString("\n")
+		b.WriteString(strings.Repeat("─", m.layout.InnerWidth))
+		b.WriteString("\n\n")
+
+		// Username (always show)
+		b.WriteString(NormalStyle.Render("Username:   "))
+		b.WriteString(AccentStyle.Render(m.selectedUserLogin))
+		b.WriteString("\n")
+
+		// Name - prefer profile, fallback to commit data
+		displayName := p.Name
+		if displayName == "" {
+			displayName = m.selectedUserName
+		}
+		b.WriteString(NormalStyle.Render("Name:       "))
+		if displayName != "" {
+			b.WriteString(NormalStyle.Render(displayName))
+		} else {
+			b.WriteString(NormalStyle.Render("-"))
+		}
+		b.WriteString("\n")
+
+		// Email - prefer profile, fallback to commit data
+		displayEmail := p.Email
+		if displayEmail == "" {
+			displayEmail = m.selectedUserEmail
+		}
+		b.WriteString(NormalStyle.Render("Email:      "))
+		if displayEmail != "" {
+			b.WriteString(NormalStyle.Render(displayEmail))
+		} else {
+			b.WriteString(NormalStyle.Render("-"))
+		}
+		b.WriteString("\n")
+
+		// Bio
+		b.WriteString(NormalStyle.Render("Bio:        "))
+		if p.Bio != "" {
+			// Truncate long bios
+			bio := p.Bio
+			if len(bio) > 60 {
+				bio = bio[:57] + "..."
+			}
+			b.WriteString(NormalStyle.Render(bio))
+		} else {
+			b.WriteString(NormalStyle.Render("-"))
+		}
+		b.WriteString("\n")
+
+		// Company
+		b.WriteString(NormalStyle.Render("Company:    "))
+		if p.Company != "" {
+			b.WriteString(NormalStyle.Render(p.Company))
+		} else {
+			b.WriteString(NormalStyle.Render("-"))
+		}
+		b.WriteString("\n")
+
+		// Location
+		b.WriteString(NormalStyle.Render("Location:   "))
+		if p.Location != "" {
+			b.WriteString(NormalStyle.Render(p.Location))
+		} else {
+			b.WriteString(NormalStyle.Render("-"))
+		}
+		b.WriteString("\n")
+
+		// Website
+		b.WriteString(NormalStyle.Render("Website:    "))
+		if p.WebsiteURL != "" {
+			b.WriteString(NormalStyle.Render(p.WebsiteURL))
+		} else {
+			b.WriteString(NormalStyle.Render("-"))
+		}
+		b.WriteString("\n")
+
+		// Twitter
+		b.WriteString(NormalStyle.Render("Twitter:    "))
+		if p.TwitterUsername != "" {
+			b.WriteString(NormalStyle.Render("@" + p.TwitterUsername))
+		} else {
+			b.WriteString(NormalStyle.Render("-"))
+		}
+		b.WriteString("\n")
+
+		// Pronouns
+		b.WriteString(NormalStyle.Render("Pronouns:   "))
+		if p.Pronouns != "" {
+			b.WriteString(NormalStyle.Render(p.Pronouns))
+		} else {
+			b.WriteString(NormalStyle.Render("-"))
+		}
+		b.WriteString("\n")
+
+		// Followers/Following
+		b.WriteString(NormalStyle.Render("Followers:  "))
+		if p.FollowerCount > 0 || p.Login != "" {
+			b.WriteString(NormalStyle.Render(fmt.Sprintf("%d", p.FollowerCount)))
+			b.WriteString(NormalStyle.Render("  |  Following: "))
+			b.WriteString(NormalStyle.Render(fmt.Sprintf("%d", p.FollowingCount)))
+		} else {
+			b.WriteString(NormalStyle.Render("-"))
+		}
+		b.WriteString("\n")
+
+		// Social accounts
+		if len(p.SocialAccounts) > 0 {
+			b.WriteString(NormalStyle.Render("Socials:    "))
+			for i, social := range p.SocialAccounts {
+				if i > 0 {
+					b.WriteString(NormalStyle.Render(", "))
+				}
+				b.WriteString(AccentStyle.Render(social.Provider + ": " + social.DisplayName))
+			}
+			b.WriteString("\n")
+		}
+
+		b.WriteString("\n")
+		b.WriteString(HintStyle.Render("Press Enter to open profile in browser"))
+	} else if m.userDetailTab == 1 {
 		// Repos tab
 		if len(m.userRepos) == 0 {
 			b.WriteString(HintStyle.Render("No repositories found."))
 		} else {
-			// Show header
-			b.WriteString(NormalStyle.Render(fmt.Sprintf("%-30s %-8s %-8s %-9s %-10s", "Name", "Stars", "Forks", "Commits", "Visibility")))
+			// Show header with Language column
+			b.WriteString(NormalStyle.Render(fmt.Sprintf("%-26s %-10s %-6s %-6s %-7s %-10s", "Name", "Lang", "Stars", "Forks", "Commits", "Visibility")))
 			b.WriteString("\n")
-			b.WriteString(NormalStyle.Render(strings.Repeat("-", 70)))
+			b.WriteString(strings.Repeat("─", m.layout.InnerWidth))
 			b.WriteString("\n")
 
 			// Show repos (limited to 15 visible)
@@ -1545,27 +2266,36 @@ func (m TUIModel) renderUserDetail() string {
 			for i := startIdx; i < endIdx; i++ {
 				repo := m.userRepos[i]
 				name := repo.Name
-				if len(name) > 28 {
-					name = name[:25] + "..."
+				if len(name) > 24 {
+					name = name[:21] + "..."
 				}
-				line := fmt.Sprintf("%-30s %-8d %-8d %-9d %-10s", name, repo.StargazerCount, repo.ForkCount, repo.CommitCount, repo.Visibility)
+				lang := repo.PrimaryLanguage
+				if lang == "" {
+					lang = "-"
+				}
+				if len(lang) > 9 {
+					lang = lang[:8] + "…"
+				}
+				line := fmt.Sprintf("%-26s %-10s %-6d %-6d %-7d %-10s", name, lang, repo.StargazerCount, repo.ForkCount, repo.CommitCount, repo.Visibility)
 				if i == m.userDetailCursor {
-					b.WriteString(SelectedStyle.Render(line))
+					b.WriteString(SelectedStyle.Width(m.layout.InnerWidth).Render(line))
 				} else {
 					b.WriteString(NormalStyle.Render(line))
 				}
 				b.WriteString("\n")
 			}
 		}
-	} else {
+		b.WriteString("\n")
+		b.WriteString(HintStyle.Render("Press Enter to open in browser"))
+	} else if m.userDetailTab == 2 {
 		// Gists tab - show files
 		if len(m.userGistFiles) == 0 {
 			b.WriteString(HintStyle.Render("No gist files found."))
 		} else {
-			// Show header
-			b.WriteString(NormalStyle.Render(fmt.Sprintf("%-30s %-12s %-8s %-5s %-12s", "Filename", "Language", "Size", "Revs", "Updated")))
+			// Show header with GUID column (indented to match file rows)
+			b.WriteString(NormalStyle.Render(fmt.Sprintf("  %-26s %-10s %-7s %-4s %-10s %-32s", "Filename", "Language", "Size", "Rev", "Updated", "GUID")))
 			b.WriteString("\n")
-			b.WriteString(NormalStyle.Render(strings.Repeat("-", 70)))
+			b.WriteString(strings.Repeat("─", m.layout.InnerWidth))
 			b.WriteString("\n")
 
 			// Show files (limited to 15 visible)
@@ -1580,16 +2310,39 @@ func (m TUIModel) renderUserDetail() string {
 
 			for i := startIdx; i < endIdx; i++ {
 				file := m.userGistFiles[i]
+
+				// Check if this is a divider row
+				if file.IsDivider {
+					// Show label on separate line
+					filesWord := "file"
+					if file.FileCount != 1 {
+						filesWord = "files"
+					}
+					updated := file.UpdatedAt
+					if len(updated) > 10 {
+						updated = updated[:10]
+					}
+					label := fmt.Sprintf("  %d %s · %s", file.FileCount, filesWord, updated)
+					b.WriteString(NormalStyle.Render(label))
+					b.WriteString("\n")
+
+					// Render solid white divider spanning full width
+					dividerText := strings.Repeat("─", m.layout.InnerWidth)
+					b.WriteString(dividerText)
+					b.WriteString("\n")
+					continue
+				}
+
 				name := file.FileName
-				if len(name) > 28 {
-					name = name[:25] + "..."
+				if len(name) > 26 {
+					name = name[:23] + "..."
 				}
 				lang := file.Language
 				if lang == "" {
 					lang = "-"
 				}
-				if len(lang) > 10 {
-					lang = lang[:10]
+				if len(lang) > 8 {
+					lang = lang[:8]
 				}
 				// Format size
 				sizeStr := fmt.Sprintf("%dB", file.Size)
@@ -1601,23 +2354,29 @@ func (m TUIModel) renderUserDetail() string {
 				if len(updated) > 10 {
 					updated = updated[:10]
 				}
-				line := fmt.Sprintf("%-30s %-12s %-8s %-5d %-12s", name, lang, sizeStr, file.RevisionCount, updated)
+				// Extract GUID from GistID (remove prefix if present)
+				guid := file.GistID
+				if len(guid) > 32 {
+					guid = guid[len(guid)-32:]
+				}
+				line := fmt.Sprintf("  %-26s %-10s %-7s %-4d %-10s %-32s", name, lang, sizeStr, file.RevisionCount, updated, guid)
 				if i == m.userDetailCursor {
-					b.WriteString(SelectedStyle.Render(line))
+					b.WriteString(SelectedStyle.Width(m.layout.InnerWidth).Render(line))
 				} else {
 					b.WriteString(NormalStyle.Render(line))
 				}
 				b.WriteString("\n")
 			}
 		}
+		b.WriteString("\n")
+		b.WriteString(HintStyle.Render("Press Enter to open in browser"))
 	}
 
 	b.WriteString("\n")
-	b.WriteString(HintStyle.Render("left/right: switch tabs | j/k: navigate | Enter: open in browser | Esc: back"))
+	b.WriteString(HintStyle.Render("left/right: switch tabs | j/k: navigate | Enter: open in browser | p: profile | Esc: back"))
 
 	// Add border with width from layout
 	borderStyle := BorderStyle.
-		Padding(1, 2).
 		Width(m.layout.ViewportWidth).
 		MarginTop(1)
 
@@ -1636,10 +2395,17 @@ func (m TUIModel) renderFetchProgress() string {
 	b.WriteString("\n\n")
 
 	b.WriteString(ProgressStyle.Render(m.fetchProgress))
-	b.WriteString("\n")
+	b.WriteString("\n\n")
+
+	// Render animated progress bar
+	if m.showProgress {
+		progressView := m.progressBar.ViewAs(m.progressPercent)
+		b.WriteString(progressView)
+		b.WriteString("\n")
+	}
 
 	// Add border with width from layout
-	borderStyle := BorderStyle.Padding(1, 2).Width(m.layout.ViewportWidth).MarginTop(1)
+	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).MarginTop(1)
 
 	return borderStyle.Render(b.String())
 }
@@ -1667,7 +2433,7 @@ func (m TUIModel) renderMenu() string {
 	b.WriteString(HintStyle.Render("Enter: select | Esc: close"))
 
 	// Add border around menu with width from layout
-	borderStyle := BorderStyle.Padding(1, 2).Width(m.layout.ViewportWidth).MarginTop(1)
+	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).MarginTop(1)
 
 	return borderStyle.Render(b.String())
 }
@@ -1712,7 +2478,7 @@ func (m TUIModel) renderDomainConfig() string {
 	}
 
 	// Add border around config screen with width from layout
-	borderStyle := BorderStyle.Padding(1, 2).Width(m.layout.ViewportWidth).MarginTop(1)
+	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).MarginTop(1)
 
 	return borderStyle.Render(b.String())
 }
@@ -1742,6 +2508,7 @@ func extractEmailFromRow(line string) string {
 }
 
 // renderTableWithLinks renders the table with colored rows for linked groups
+// STYLE GUIDE: All dividers and selectors use m.layout.InnerWidth for edge-to-edge rendering
 func (m TUIModel) renderTableWithLinks() string {
 	// Get the base table view
 	baseView := m.table.View()
@@ -1761,10 +2528,29 @@ func (m TUIModel) renderTableWithLinks() string {
 	// Header row + border line = 2 lines before data
 	headerLines := 2
 
+	// Get current cursor position to identify selected row
+	cursor := m.table.Cursor()
+
 	for i, line := range lines {
-		// Skip header lines
+		// Replace the table's built-in divider (line 1) with full-width white divider
+		// STYLE GUIDE: Dividers use InnerWidth (not ViewportWidth) to fit inside border
+		if i == 1 {
+			result[i] = strings.Repeat("─", m.layout.InnerWidth)
+			continue
+		}
+		// Keep header row (line 0)
 		if i < headerLines {
 			result[i] = line
+			continue
+		}
+
+		// Calculate data row index (subtract header lines)
+		dataRowIndex := i - headerLines
+
+		// Check if this is the selected row
+		// STYLE GUIDE: Selectors use .Width(InnerWidth) for edge-to-edge rendering
+		if dataRowIndex == cursor {
+			result[i] = SelectedStyle.Width(m.layout.InnerWidth).Render(line)
 			continue
 		}
 

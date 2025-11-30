@@ -213,6 +213,27 @@ const selectCombinedTotalCommits = `
 SELECT COUNT(*) FROM commits
 `
 
+// Schema for user profiles (fetched from GitHub for tagged users)
+const createUserProfilesTable = `
+CREATE TABLE IF NOT EXISTS user_profiles (
+    login TEXT PRIMARY KEY,
+    name TEXT,
+    bio TEXT,
+    company TEXT,
+    location TEXT,
+    email TEXT,
+    website_url TEXT,
+    twitter_username TEXT,
+    pronouns TEXT,
+    avatar_url TEXT,
+    follower_count INTEGER,
+    following_count INTEGER,
+    created_at TEXT,
+    social_accounts TEXT,
+    fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+`
+
 // Schema for user repositories (fetched from GitHub for tagged users)
 const createUserRepositoriesTable = `
 CREATE TABLE IF NOT EXISTS user_repositories (
@@ -233,6 +254,8 @@ CREATE TABLE IF NOT EXISTS user_repositories (
     is_in_organization BOOLEAN,
     has_wiki_enabled BOOLEAN,
     visibility TEXT,
+    primary_language TEXT,
+    license_name TEXT,
     created_at TEXT,
     updated_at TEXT,
     pushed_at TEXT,
@@ -255,6 +278,7 @@ CREATE TABLE IF NOT EXISTS user_gists (
     is_public BOOLEAN,
     is_fork BOOLEAN,
     stargazer_count INTEGER,
+    fork_count INTEGER,
     revision_count INTEGER,
     created_at TEXT,
     updated_at TEXT,
@@ -300,19 +324,36 @@ CREATE TABLE IF NOT EXISTS gist_comments (
 CREATE INDEX IF NOT EXISTS idx_gist_comments_gist ON gist_comments(gist_id);
 `
 
+// SQL queries for user profiles
+const insertUserProfile = `
+INSERT OR REPLACE INTO user_profiles (
+    login, name, bio, company, location, email, website_url,
+    twitter_username, pronouns, avatar_url, follower_count, following_count,
+    created_at, social_accounts, fetched_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+`
+
+const selectUserProfile = `
+SELECT login, name, bio, company, location, email, website_url,
+       twitter_username, pronouns, avatar_url, follower_count, following_count,
+       created_at, social_accounts, fetched_at
+FROM user_profiles
+WHERE login = ?
+`
+
 // SQL queries for user repositories
 const insertUserRepository = `
 INSERT OR REPLACE INTO user_repositories (
     github_login, name, owner_login, description, url, ssh_url, homepage_url,
     disk_usage, stargazer_count, fork_count, commit_count, is_fork, is_empty, is_in_organization,
-    has_wiki_enabled, visibility, created_at, updated_at, pushed_at, fetched_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    has_wiki_enabled, visibility, primary_language, license_name, created_at, updated_at, pushed_at, fetched_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 `
 
 const selectUserRepositories = `
 SELECT id, github_login, name, owner_login, description, url, ssh_url, homepage_url,
        disk_usage, stargazer_count, fork_count, commit_count, is_fork, is_empty, is_in_organization,
-       has_wiki_enabled, visibility, created_at, updated_at, pushed_at, fetched_at
+       has_wiki_enabled, visibility, primary_language, license_name, created_at, updated_at, pushed_at, fetched_at
 FROM user_repositories
 WHERE github_login = ?
 ORDER BY stargazer_count DESC, name ASC
@@ -326,17 +367,33 @@ const deleteUserRepositories = `
 DELETE FROM user_repositories WHERE github_login = ?
 `
 
+const deleteUserRepository = `
+DELETE FROM user_repositories WHERE github_login = ? AND name = ?
+`
+
+const deleteCommitsByEmail = `
+DELETE FROM commits WHERE repo_owner = ? AND repo_name = ? AND committer_email = ?
+`
+
+const updateCommitterLogin = `
+UPDATE commits SET github_committer_login = ? WHERE repo_owner = ? AND repo_name = ? AND committer_email = ?
+`
+
+const updateCommitterName = `
+UPDATE commits SET committer_name = ? WHERE repo_owner = ? AND repo_name = ? AND committer_email = ?
+`
+
 // SQL queries for user gists
 const insertUserGist = `
 INSERT OR REPLACE INTO user_gists (
     id, github_login, name, description, url, resource_path,
-    is_public, is_fork, stargazer_count, revision_count, created_at, updated_at, pushed_at, fetched_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    is_public, is_fork, stargazer_count, fork_count, revision_count, created_at, updated_at, pushed_at, fetched_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 `
 
 const selectUserGists = `
 SELECT id, github_login, name, description, url, resource_path,
-       is_public, is_fork, stargazer_count, revision_count, created_at, updated_at, pushed_at, fetched_at
+       is_public, is_fork, stargazer_count, fork_count, revision_count, created_at, updated_at, pushed_at, fetched_at
 FROM user_gists
 WHERE github_login = ?
 ORDER BY created_at DESC
@@ -350,9 +407,13 @@ const deleteUserGists = `
 DELETE FROM user_gists WHERE github_login = ?
 `
 
+const deleteUserGist = `
+DELETE FROM user_gists WHERE github_login = ? AND id = ?
+`
+
 // SQL queries for gist files
 const insertGistFile = `
-INSERT INTO gist_files (
+INSERT OR REPLACE INTO gist_files (
     gist_id, name, encoded_name, extension, language, size, encoding, is_image, is_truncated, text
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
@@ -388,7 +449,46 @@ DELETE FROM gist_comments WHERE gist_id = ?
 
 // Check if user has fetched data
 const selectUserHasData = `
-SELECT EXISTS(SELECT 1 FROM user_repositories WHERE github_login = ?)
+SELECT EXISTS(SELECT 1 FROM user_profiles WHERE login = ?)
+   OR EXISTS(SELECT 1 FROM user_repositories WHERE github_login = ?)
    OR EXISTS(SELECT 1 FROM user_gists WHERE github_login = ?)
 `
 
+// Schema for API call logs
+const createAPILogsTable = `
+CREATE TABLE IF NOT EXISTS api_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    method TEXT NOT NULL,
+    endpoint TEXT NOT NULL,
+    status_code INTEGER,
+    error TEXT,
+    rate_limit_remaining INTEGER,
+    rate_limit_reset TEXT,
+    login TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_logs_timestamp ON api_logs(timestamp);
+CREATE INDEX IF NOT EXISTS idx_api_logs_login ON api_logs(login);
+`
+
+// SQL queries for API logs
+const insertAPILog = `
+INSERT INTO api_logs (method, endpoint, status_code, error, rate_limit_remaining, rate_limit_reset, login)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+`
+
+const selectAPILogs = `
+SELECT id, timestamp, method, endpoint, status_code, error, rate_limit_remaining, rate_limit_reset, login
+FROM api_logs
+ORDER BY timestamp DESC
+LIMIT ?
+`
+
+const selectAPILogsByLogin = `
+SELECT id, timestamp, method, endpoint, status_code, error, rate_limit_remaining, rate_limit_reset, login
+FROM api_logs
+WHERE login = ?
+ORDER BY timestamp DESC
+LIMIT ?
+`

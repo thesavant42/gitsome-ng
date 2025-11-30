@@ -120,6 +120,8 @@ type UserRepository struct {
 	IsInOrganization bool
 	HasWikiEnabled   bool
 	Visibility       string
+	PrimaryLanguage  string // Primary programming language
+	LicenseName      string // License name (e.g., "MIT License")
 	CreatedAt        string
 	UpdatedAt        string
 	PushedAt         string
@@ -137,6 +139,7 @@ type UserGist struct {
 	IsPublic       bool
 	IsFork         bool
 	StargazerCount int
+	ForkCount      int // Number of forks
 	RevisionCount  int // Number of revisions/versions
 	CreatedAt      string
 	UpdatedAt      string
@@ -171,9 +174,36 @@ type GistComment struct {
 	UpdatedAt   string
 }
 
+// SocialAccount represents a linked social account on GitHub profile
+type SocialAccount struct {
+	Provider    string // TWITTER, LINKEDIN, FACEBOOK, etc.
+	DisplayName string
+	URL         string
+}
+
+// UserProfile represents GitHub user profile information
+type UserProfile struct {
+	Login           string
+	Name            string
+	Bio             string
+	Company         string
+	Location        string
+	Email           string
+	WebsiteURL      string
+	TwitterUsername string
+	Pronouns        string
+	AvatarURL       string
+	FollowerCount   int
+	FollowingCount  int
+	CreatedAt       string
+	SocialAccounts  []SocialAccount
+	FetchedAt       time.Time
+}
+
 // UserData contains all fetched data for a user
 type UserData struct {
 	Login        string
+	Profile      UserProfile
 	Repositories []UserRepository
 	Gists        []UserGist
 }
