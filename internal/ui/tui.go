@@ -58,6 +58,7 @@ var menuOptions = []string{
 	"Add Repository",
 	"Query Tagged Users",
 	"Search",
+	"Docker Hub Search",
 	"Switch Project",
 	"Export Tab to Markdown",
 	"Export Database Backup",
@@ -69,6 +70,7 @@ var searchOptions = []string{
 	"Users with Docker profiles",
 	"Users in highlight domains",
 	"Users with Docker AND in highlight domains",
+	"Local keyword search (bio, repos, gists)",
 }
 
 // gistFileEntry represents a flattened view of a gist file with parent gist info
@@ -142,6 +144,9 @@ type TUIModel struct {
 	// Project switch state
 	switchProject bool // true when user wants to switch to a different project
 
+	// Docker Hub search state
+	launchDockerSearch bool // true when user wants to launch Docker Hub search
+
 	// Export state
 	dbPath        string // path to current database for backup export
 	exportMessage string // message to show after export (success or error)
@@ -181,6 +186,8 @@ type TUIModel struct {
 	searchQuery       string // current search query type: "docker", "domains"
 	searchPickerVisible bool // whether search query picker is shown
 	searchPickerCursor  int  // cursor in search picker
+	localSearchInputVisible bool   // whether local search keyword input is shown
+	localSearchKeyword      string // keyword being typed for local search
 
 	// Delete confirmation state
 	deleteConfirmVisible bool
@@ -682,6 +689,11 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleSearchPicker(msg)
 		}
 
+		// Handle local search keyword input
+		if m.localSearchInputVisible {
+			return m.handleLocalSearchInput(msg)
+		}
+
 		// Block input while fetching
 		if m.fetchingRepo != nil || m.queryingUsers {
 			return m, nil
@@ -706,6 +718,11 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.searchPickerVisible = true
 			m.searchPickerCursor = 0
 			return m, nil
+
+		case "ctrl+d":
+			// Launch Docker Hub search
+			m.launchDockerSearch = true
+			return m, tea.Quit
 
 		case "left", "h":
 			// Navigate to previous repo page
@@ -1115,11 +1132,15 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.menuVisible = false
 			m.searchPickerVisible = true
 			m.searchPickerCursor = 0
-		case 4: // Switch Project
+		case 4: // Docker Hub Search
+			m.menuVisible = false
+			m.launchDockerSearch = true
+			return m, tea.Quit
+		case 5: // Switch Project
 			m.menuVisible = false
 			m.switchProject = true
 			return m, tea.Quit
-		case 5: // Export Tab to Markdown
+		case 6: // Export Tab to Markdown
 			m.menuVisible = false
 			filename, err := ExportTabToMarkdown(m.stats, m.repoOwner, m.repoName, m.totalCommits, m.showCombined)
 			if err != nil {
@@ -1127,7 +1148,7 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.exportMessage = fmt.Sprintf("Exported to %s", filename)
 			}
-		case 6: // Export Database Backup
+		case 7: // Export Database Backup
 			m.menuVisible = false
 			if m.dbPath != "" {
 				filename, err := ExportDatabaseBackup(m.dbPath)
@@ -1139,7 +1160,7 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.exportMessage = "Database path not available"
 			}
-		case 7: // Export Project Report
+		case 8: // Export Project Report
 			m.menuVisible = false
 			if m.database != nil {
 				filename, err := ExportProjectReport(m.database, m.dbPath)
@@ -1156,6 +1177,37 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// handleLocalSearchInput handles key events for local keyword search input
+func (m TUIModel) handleLocalSearchInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.localSearchInputVisible = false
+		m.localSearchKeyword = ""
+		return m, nil
+
+	case "enter":
+		if m.localSearchKeyword != "" {
+			m.localSearchInputVisible = false
+			m.switchToLocalSearch(m.localSearchKeyword)
+		}
+		return m, nil
+
+	case "backspace":
+		if len(m.localSearchKeyword) > 0 {
+			m.localSearchKeyword = m.localSearchKeyword[:len(m.localSearchKeyword)-1]
+		}
+		return m, nil
+
+	default:
+		// Add character to keyword (only printable chars)
+		key := msg.String()
+		if len(key) == 1 {
+			m.localSearchKeyword += key
+		}
+		return m, nil
+	}
 }
 
 // handleSearchPicker handles key events in search query picker
@@ -1186,14 +1238,20 @@ func (m TUIModel) handleSearchPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "enter":
-		m.searchPickerVisible = false
 		switch m.searchPickerCursor {
 		case 0: // Users with Docker profiles
+			m.searchPickerVisible = false
 			m.switchToSearch("docker")
 		case 1: // Users in highlight domains
+			m.searchPickerVisible = false
 			m.switchToSearch("domains")
 		case 2: // Users with Docker AND in highlight domains
+			m.searchPickerVisible = false
 			m.switchToSearch("docker_and_domains")
+		case 3: // Local keyword search
+			m.searchPickerVisible = false
+			m.localSearchInputVisible = true
+			m.localSearchKeyword = ""
 		}
 		return m, nil
 	}
@@ -1512,6 +1570,85 @@ func (m *TUIModel) clearSearch() {
 		m.currentRepoIndex = 0
 		m.switchToRepo(0)
 	}
+}
+
+// switchToLocalSearch runs a local keyword search and displays results
+func (m *TUIModel) switchToLocalSearch(keyword string) {
+	if m.database == nil || keyword == "" {
+		return
+	}
+
+	results, err := m.database.SearchLocalKeyword(keyword)
+	if err != nil {
+		results = []db.LocalSearchResult{}
+	}
+
+	// Convert LocalSearchResult to ContributorStats for display
+	// Put match context in the Name column: "type: source"
+	var stats []models.ContributorStats
+	for _, r := range results {
+		// Truncate match source for display
+		matchSource := r.MatchSource
+		if len(matchSource) > 35 {
+			matchSource = matchSource[:32] + "..."
+		}
+		
+		// Shorten type labels for display (standardized to 3 chars)
+		typeLabel := r.MatchType
+		switch r.MatchType {
+		case "bio":
+			typeLabel = "bio"
+		case "company":
+			typeLabel = "cmp"
+		case "location":
+			typeLabel = "loc"
+		case "repo":
+			typeLabel = "rep"
+		case "gist":
+			typeLabel = "gst"
+		case "gist_file":
+			typeLabel = "gst"
+		}
+		
+		// Format: "type: source" to show what matched
+		matchInfo := fmt.Sprintf("%s: %s", typeLabel, matchSource)
+		
+		s := models.ContributorStats{
+			Name:        matchInfo,
+			Email:       r.Email,
+			GitHubLogin: r.Login,
+			CommitCount: 0, // Not applicable for local search
+			Percentage:  0,
+		}
+		stats = append(stats, s)
+	}
+
+	m.stats = stats
+	m.totalCommits = len(results)
+	m.searchActive = true
+	m.showCombined = false
+	m.searchQuery = "Local: " + keyword
+	m.repoOwner = "Search"
+	m.repoName = m.searchQuery
+
+	// Clear repo-specific data for search view
+	m.links = make(map[string]int)
+	m.tags = make(map[string]bool)
+	m.pendingLinks = nil
+
+	// Load global highlight domains
+	domains, err := m.database.GetDomains()
+	if err != nil {
+		domains = make(map[string]int)
+	}
+	m.highlightDomains = domains
+	m.domainList = make([]string, 0, len(domains))
+	for domain := range domains {
+		m.domainList = append(m.domainList, domain)
+	}
+
+	// Rebuild table
+	m.rebuildTable()
 }
 
 // rebuildTable recreates the table with current stats
@@ -2339,6 +2476,11 @@ func (m TUIModel) View() string {
 		return m.renderSearchPicker()
 	}
 
+	// Show local search keyword input if visible
+	if m.localSearchInputVisible {
+		return m.renderLocalSearchInput()
+	}
+
 	// Show menu if visible
 	if m.menuVisible {
 		return m.renderMenu()
@@ -2405,6 +2547,7 @@ func (m TUIModel) View() string {
 			"  A              Add repository (quick add, skips menu)",
 			"  R              Remove current repository (with confirmation)",
 			"  S              Search (Docker profiles, highlight domains)",
+			"  Ctrl+D         Docker Hub search",
 			"  X              Export project report (all repos summary)",
 			"  M              Open menu (all options)",
 			"  ?              Toggle this help",
@@ -3076,6 +3219,30 @@ func (m TUIModel) renderSearchPicker() string {
 	return borderStyle.Render(b.String())
 }
 
+// renderLocalSearchInput renders the local keyword search input overlay
+func (m TUIModel) renderLocalSearchInput() string {
+	var b strings.Builder
+
+	b.WriteString(TitleStyle.Render("Local Keyword Search"))
+	b.WriteString("\n\n")
+
+	b.WriteString(NormalStyle.Render("Search bio, repos, gists for keyword:"))
+	b.WriteString("\n\n")
+
+	// Show input with cursor
+	b.WriteString(AccentStyle.Render("> "))
+	b.WriteString(NormalStyle.Render(m.localSearchKeyword))
+	b.WriteString(AccentStyle.Render("_"))
+	b.WriteString("\n\n")
+
+	b.WriteString(HintStyle.Render("Enter: search | Esc: cancel"))
+
+	// Add border around input with width from layout
+	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).Padding(1, 1).MarginTop(1)
+
+	return borderStyle.Render(b.String())
+}
+
 // extractDomain extracts the domain part from an email address
 func extractDomain(email string) string {
 	parts := strings.Split(email, "@")
@@ -3230,9 +3397,9 @@ func RunMultiRepoTUI(
 	tableType string,
 	token string,
 	dbPath string,
-) (bool, error) {
+) (TUIResult, error) {
 	if len(repos) == 0 {
-		return false, fmt.Errorf("no repositories to display")
+		return TUIResult{}, fmt.Errorf("no repositories to display")
 	}
 
 	// Start with the first repo
@@ -3275,14 +3442,23 @@ func RunMultiRepoTUI(
 
 	finalModel, err := p.Run()
 	if err != nil {
-		return false, err
+		return TUIResult{}, err
 	}
 
-	// Check if user wants to switch projects
-	if m, ok := finalModel.(TUIModel); ok && m.switchProject {
-		return true, nil
+	// Check what action user wants
+	if m, ok := finalModel.(TUIModel); ok {
+		return TUIResult{
+			SwitchProject:      m.switchProject,
+			LaunchDockerSearch: m.launchDockerSearch,
+		}, nil
 	}
-	return false, nil
+	return TUIResult{}, nil
+}
+
+// TUIResult represents the result of running the TUI
+type TUIResult struct {
+	SwitchProject      bool
+	LaunchDockerSearch bool
 }
 
 // formatProviderName converts provider names to display format

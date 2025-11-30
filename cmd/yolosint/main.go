@@ -137,14 +137,22 @@ func main() {
 			trackedRepos, err := database.GetTrackedRepos()
 			if err == nil && len(trackedRepos) > 0 {
 			// Launch multi-repo TUI
-				switchProject, err := ui.RunMultiRepoTUI(trackedRepos, database, "Committers", token, selectedDBPath)
+				result, err := ui.RunMultiRepoTUI(trackedRepos, database, "Committers", token, selectedDBPath)
 				if err != nil {
 					ui.PrintError(fmt.Sprintf("Interactive mode failed: %v", err))
 					os.Exit(1)
 				}
 				
+				// If user wants to launch Docker Hub search
+				if result.LaunchDockerSearch {
+					if err := ui.RunDockerHubSearch(nil); err != nil {
+						ui.PrintError(fmt.Sprintf("Docker Hub search failed: %v", err))
+					}
+					continue // Return to main TUI after search
+				}
+				
 				// If user wants to switch projects, close current db and show selector
-				if switchProject {
+				if result.SwitchProject {
 					database.Close()
 					
 					// Clear screen before showing project selector

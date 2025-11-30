@@ -1248,3 +1248,168 @@ func (db *DB) SearchUsersWithDockerAndDomains() ([]models.ContributorStats, int,
 	return stats, totalCommits, nil
 }
 
+// LocalSearchResult represents a match from local keyword search
+type LocalSearchResult struct {
+	Login       string
+	Name        string
+	Email       string
+	MatchType   string // "bio", "company", "location", "repo", "gist", "gist_file"
+	MatchSource string // The actual text that matched (repo name, gist desc, etc.)
+}
+
+// SearchLocalKeyword searches user profiles, repos, and gists for a keyword
+func (db *DB) SearchLocalKeyword(keyword string) ([]LocalSearchResult, error) {
+	if keyword == "" {
+		return []LocalSearchResult{}, nil
+	}
+
+	var results []LocalSearchResult
+	pattern := "%" + keyword + "%"
+
+	// Search user profiles (bio, company, location)
+	profileQuery := `
+		SELECT login, name, email, 
+			CASE 
+				WHEN bio LIKE ? THEN 'bio'
+				WHEN company LIKE ? THEN 'company'
+				WHEN location LIKE ? THEN 'location'
+			END as match_type,
+			CASE 
+				WHEN bio LIKE ? THEN bio
+				WHEN company LIKE ? THEN company
+				WHEN location LIKE ? THEN location
+			END as match_source
+		FROM user_profiles
+		WHERE bio LIKE ? OR company LIKE ? OR location LIKE ?
+	`
+	rows, err := db.conn.Query(profileQuery, pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search profiles: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var r LocalSearchResult
+		var matchType, matchSource sql.NullString
+		if err := rows.Scan(&r.Login, &r.Name, &r.Email, &matchType, &matchSource); err != nil {
+			continue
+		}
+		if matchType.Valid {
+			r.MatchType = matchType.String
+		}
+		if matchSource.Valid {
+			r.MatchSource = matchSource.String
+		}
+		results = append(results, r)
+	}
+
+	// Search user repositories (name, description)
+	// Show what actually matched - repo name or description
+	repoQuery := `
+		SELECT ur.github_login, up.name, up.email,
+			'repo' as match_type,
+			CASE 
+				WHEN ur.name LIKE ? THEN ur.name
+				ELSE ur.description
+			END as match_source
+		FROM user_repositories ur
+		LEFT JOIN user_profiles up ON ur.github_login = up.login
+		WHERE ur.name LIKE ? OR ur.description LIKE ?
+	`
+	rows2, err := db.conn.Query(repoQuery, pattern, pattern, pattern)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search repos: %w", err)
+	}
+	defer rows2.Close()
+
+	for rows2.Next() {
+		var r LocalSearchResult
+		var name, email sql.NullString
+		var matchSource sql.NullString
+		if err := rows2.Scan(&r.Login, &name, &email, &r.MatchType, &matchSource); err != nil {
+			continue
+		}
+		if name.Valid {
+			r.Name = name.String
+		}
+		if email.Valid {
+			r.Email = email.String
+		}
+		if matchSource.Valid {
+			r.MatchSource = matchSource.String
+		}
+		results = append(results, r)
+	}
+
+	// Search gists (description)
+	gistQuery := `
+		SELECT ug.github_login, up.name, up.email,
+			'gist' as match_type,
+			ug.description as match_source
+		FROM user_gists ug
+		LEFT JOIN user_profiles up ON ug.github_login = up.login
+		WHERE ug.description LIKE ?
+	`
+	rows3, err := db.conn.Query(gistQuery, pattern)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search gists: %w", err)
+	}
+	defer rows3.Close()
+
+	for rows3.Next() {
+		var r LocalSearchResult
+		var name, email sql.NullString
+		var matchSource sql.NullString
+		if err := rows3.Scan(&r.Login, &name, &email, &r.MatchType, &matchSource); err != nil {
+			continue
+		}
+		if name.Valid {
+			r.Name = name.String
+		}
+		if email.Valid {
+			r.Email = email.String
+		}
+		if matchSource.Valid {
+			r.MatchSource = matchSource.String
+		}
+		results = append(results, r)
+	}
+
+	// Search gist files (filename)
+	gistFileQuery := `
+		SELECT ug.github_login, up.name, up.email,
+			'gist_file' as match_type,
+			gf.name as match_source
+		FROM gist_files gf
+		JOIN user_gists ug ON gf.gist_id = ug.id
+		LEFT JOIN user_profiles up ON ug.github_login = up.login
+		WHERE gf.name LIKE ?
+	`
+	rows4, err := db.conn.Query(gistFileQuery, pattern)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search gist files: %w", err)
+	}
+	defer rows4.Close()
+
+	for rows4.Next() {
+		var r LocalSearchResult
+		var name, email sql.NullString
+		var matchSource sql.NullString
+		if err := rows4.Scan(&r.Login, &name, &email, &r.MatchType, &matchSource); err != nil {
+			continue
+		}
+		if name.Valid {
+			r.Name = name.String
+		}
+		if email.Valid {
+			r.Email = email.String
+		}
+		if matchSource.Valid {
+			r.MatchSource = matchSource.String
+		}
+		results = append(results, r)
+	}
+
+	return results, nil
+}
+
