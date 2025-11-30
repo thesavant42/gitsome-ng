@@ -229,6 +229,7 @@ CREATE TABLE IF NOT EXISTS user_profiles (
     follower_count INTEGER,
     following_count INTEGER,
     created_at TEXT,
+    organizations TEXT,
     social_accounts TEXT,
     fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -329,14 +330,14 @@ const insertUserProfile = `
 INSERT OR REPLACE INTO user_profiles (
     login, name, bio, company, location, email, website_url,
     twitter_username, pronouns, avatar_url, follower_count, following_count,
-    created_at, social_accounts, fetched_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    created_at, organizations, social_accounts, fetched_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 `
 
 const selectUserProfile = `
 SELECT login, name, bio, company, location, email, website_url,
        twitter_username, pronouns, avatar_url, follower_count, following_count,
-       created_at, social_accounts, fetched_at
+       created_at, organizations, social_accounts, fetched_at
 FROM user_profiles
 WHERE login = ?
 `

@@ -196,6 +196,7 @@ type UserProfile struct {
 	FollowerCount   int
 	FollowingCount  int
 	CreatedAt       string
+	Organizations   []string        // list of public organization logins
 	SocialAccounts  []SocialAccount
 	FetchedAt       time.Time
 }

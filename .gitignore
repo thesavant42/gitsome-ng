@@ -11,3 +11,5 @@ __pycache__/
 *.exe
 *.md
 !README.md
+*.log
+/4phils.png

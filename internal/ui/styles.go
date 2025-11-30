@@ -8,11 +8,11 @@ import (
 
 // Layout constants - single source of truth for all viewport dimensions
 const (
-	MinViewportWidth  = 110
-	MaxViewportWidth  = 140
-	DefaultWidth      = 110 // Used when terminal size is unknown
-	TableHeight       = 20
-	BorderPadding     = 2 // left/right padding inside borders
+	MinViewportWidth = 110
+	MaxViewportWidth = 140
+	DefaultWidth     = 110 // Used when terminal size is unknown
+	TableHeight      = 20
+	BorderPadding    = 2 // left/right padding inside borders
 )
 
 // Layout holds computed dimensions for the current terminal size
@@ -28,9 +28,9 @@ func NewLayout(terminalWidth int) Layout {
 	width := clamp(terminalWidth, MinViewportWidth, MaxViewportWidth)
 	return Layout{
 		ViewportWidth: width,
-		ContentWidth:  width - 2,  // minus border chars
-		TableWidth:    width - 4,  // minus border + padding
-		InnerWidth:    width - 2,  // EXACT width for content inside borders (THE ONE RULE)
+		ContentWidth:  width - 2, // minus border chars
+		TableWidth:    width - 4, // minus border + padding
+		InnerWidth:    width - 0, // EXACT width for content inside borders (THE ONE RULE)
 	}
 }
 
@@ -64,13 +64,13 @@ var TableColumns = []table.Column{
 
 // Color palette - centralized color definitions
 var (
-	ColorBorder       = lipgloss.Color("196") // red
-	ColorHighlight    = lipgloss.Color("88")  // dark red background
-	ColorText         = lipgloss.Color("15")  // bright white
-	ColorAccent       = lipgloss.Color("226") // bright yellow
-	ColorAccentDim    = lipgloss.Color("220") // yellow (progress)
-	ColorTextDim      = lipgloss.Color("241") // gray
-	ColorBlack        = lipgloss.Color("0")   // black
+	ColorBorder    = lipgloss.Color("196") // red
+	ColorHighlight = lipgloss.Color("88")  // dark red background
+	ColorText      = lipgloss.Color("15")  // bright white
+	ColorAccent    = lipgloss.Color("226") // bright yellow
+	ColorAccentDim = lipgloss.Color("220") // yellow (progress)
+	ColorTextDim   = lipgloss.Color("241") // gray
+	ColorBlack     = lipgloss.Color("0")   // black
 )
 
 // Link colors for link groups
@@ -92,75 +92,75 @@ var (
 	// This ensures consistent 2-char overhead (left + right border edges)
 	// Content inside borders must use InnerWidth (ViewportWidth - 2)
 	BorderStyle = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ColorBorder)
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(ColorBorder)
 
 	// Title style for section headers
 	TitleStyle = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(ColorText).
-		MarginBottom(1)
+			Bold(true).
+			Foreground(ColorText).
+			MarginBottom(1)
 
 	// Selected row/item style
 	SelectedStyle = lipgloss.NewStyle().
-		Foreground(ColorText).
-		Background(ColorHighlight).
-		Bold(true)
+			Foreground(ColorText).
+			Background(ColorHighlight).
+			Bold(true)
 
 	// Normal text style
 	NormalStyle = lipgloss.NewStyle().
-		Foreground(ColorText)
+			Foreground(ColorText)
 
 	// Hint/help text style
 	HintStyle = lipgloss.NewStyle().
-		Foreground(ColorText).
-		Italic(true)
+			Foreground(ColorText).
+			Italic(true)
 
 	// Accent style for highlighted text (yellow)
 	AccentStyle = lipgloss.NewStyle().
-		Foreground(ColorAccent).
-		Bold(true)
+			Foreground(ColorAccent).
+			Bold(true)
 
 	// Progress style
 	ProgressStyle = lipgloss.NewStyle().
-		Foreground(ColorAccentDim)
+			Foreground(ColorAccentDim)
 
 	// Tab styles
 	TabActiveStyle = lipgloss.NewStyle().
-		Foreground(ColorText).
-		Background(ColorHighlight).
-		Bold(true).
-		Padding(0, 2)
+			Foreground(ColorText).
+			Background(ColorHighlight).
+			Bold(true).
+			Padding(0, 2)
 
 	TabInactiveStyle = lipgloss.NewStyle().
-		Foreground(ColorText).
-		Padding(0, 2)
+				Foreground(ColorText).
+				Padding(0, 2)
 
 	// Arrow style for pagination
 	ArrowStyle = lipgloss.NewStyle().
-		Foreground(ColorBorder).
-		Bold(true)
+			Foreground(ColorBorder).
+			Bold(true)
 
 	// Stats footer style
 	StatsStyle = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(ColorText)
+			Bold(true).
+			Foreground(ColorText)
 
 	// Gist divider row style - accent yellow, no background
 	DividerStyle = lipgloss.NewStyle().
-		Foreground(ColorAccent)
+			Foreground(ColorAccent)
 
 	// Gist divider row selected style - accent on red highlight
 	DividerSelectedStyle = lipgloss.NewStyle().
-		Foreground(ColorAccent).
-		Background(ColorHighlight).
-		Bold(true)
+				Foreground(ColorAccent).
+				Background(ColorHighlight).
+				Bold(true)
 )
 
 // BorderedBox returns a style for bordered content boxes with the layout width
 func BorderedBox(layout Layout) lipgloss.Style {
 	return BorderStyle.
-		Padding(1, 2).
+		Padding(1, 0).
 		Width(layout.ViewportWidth)
 }
 
@@ -223,4 +223,3 @@ func NewAppTheme() *huh.Theme {
 
 	return t
 }
-

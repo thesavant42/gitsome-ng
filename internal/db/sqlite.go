@@ -107,6 +107,7 @@ func New(dbPath string) (*DB, error) {
 		"ALTER TABLE user_repositories ADD COLUMN primary_language TEXT",
 		"ALTER TABLE user_repositories ADD COLUMN license_name TEXT",
 		"ALTER TABLE user_gists ADD COLUMN fork_count INTEGER DEFAULT 0",
+		"ALTER TABLE user_profiles ADD COLUMN organizations TEXT",
 	}
 	for _, migration := range migrations {
 		conn.Exec(migration) // Ignore errors - column may already exist
@@ -854,6 +855,16 @@ func (db *DB) GetGistComments(gistID string) ([]models.GistComment, error) {
 
 // SaveUserProfile saves a user's profile to the database
 func (db *DB) SaveUserProfile(profile models.UserProfile) error {
+	// Serialize organizations to JSON
+	orgsJSON := "[]"
+	if len(profile.Organizations) > 0 {
+		bytes, err := json.Marshal(profile.Organizations)
+		if err != nil {
+			return fmt.Errorf("failed to marshal organizations: %w", err)
+		}
+		orgsJSON = string(bytes)
+	}
+
 	// Serialize social accounts to JSON
 	socialJSON := "[]"
 	if len(profile.SocialAccounts) > 0 {
@@ -868,7 +879,7 @@ func (db *DB) SaveUserProfile(profile models.UserProfile) error {
 		profile.Login, profile.Name, profile.Bio, profile.Company, profile.Location,
 		profile.Email, profile.WebsiteURL, profile.TwitterUsername, profile.Pronouns,
 		profile.AvatarURL, profile.FollowerCount, profile.FollowingCount,
-		profile.CreatedAt, socialJSON,
+		profile.CreatedAt, orgsJSON, socialJSON,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to save user profile: %w", err)
@@ -879,7 +890,7 @@ func (db *DB) SaveUserProfile(profile models.UserProfile) error {
 // GetUserProfile retrieves a user's profile from the database
 func (db *DB) GetUserProfile(login string) (models.UserProfile, error) {
 	var p models.UserProfile
-	var socialJSON sql.NullString
+	var orgsJSON, socialJSON sql.NullString
 	var fetchedAt string
 	var name, bio, company, location, email, websiteURL, twitterUsername, pronouns, avatarURL, createdAt sql.NullString
 	var followerCount, followingCount sql.NullInt64
@@ -887,7 +898,7 @@ func (db *DB) GetUserProfile(login string) (models.UserProfile, error) {
 	err := db.conn.QueryRow(selectUserProfile, login).Scan(
 		&p.Login, &name, &bio, &company, &location, &email, &websiteURL,
 		&twitterUsername, &pronouns, &avatarURL, &followerCount, &followingCount,
-		&createdAt, &socialJSON, &fetchedAt,
+		&createdAt, &orgsJSON, &socialJSON, &fetchedAt,
 	)
 	if err == sql.ErrNoRows {
 		return p, nil // Return empty profile if not found
@@ -909,6 +920,14 @@ func (db *DB) GetUserProfile(login string) (models.UserProfile, error) {
 	p.CreatedAt = createdAt.String
 	p.FollowerCount = int(followerCount.Int64)
 	p.FollowingCount = int(followingCount.Int64)
+
+	// Parse organizations from JSON
+	if orgsJSON.Valid && orgsJSON.String != "" && orgsJSON.String != "[]" {
+		if err := json.Unmarshal([]byte(orgsJSON.String), &p.Organizations); err != nil {
+			// Log but don't fail - organizations are optional
+			p.Organizations = nil
+		}
+	}
 
 	// Parse social accounts from JSON
 	if socialJSON.Valid && socialJSON.String != "" && socialJSON.String != "[]" {

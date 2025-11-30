@@ -19,6 +19,9 @@ const (
 )
 
 func main() {
+	// Show splash screen on startup
+	ui.ShowSplash()
+	
 	// Load .env file if it exists (silently ignore if not found)
 	_ = godotenv.Load()
 

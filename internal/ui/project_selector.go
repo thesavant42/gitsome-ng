@@ -165,7 +165,7 @@ func (m ProjectSelectorModel) View() string {
 			for i, proj := range m.projects {
 				// Display project name without .db extension
 				displayName := strings.TrimSuffix(proj, filepath.Ext(proj))
-				line := fmt.Sprintf("  %s", displayName)
+				line := displayName
 				if i == m.cursor {
 					padding := layout.InnerWidth - len(line)
 					if padding > 0 {
@@ -181,7 +181,7 @@ func (m ProjectSelectorModel) View() string {
 		}
 
 		// Create New option
-		createLine := "  + Create New Project"
+		createLine := "Create New Project"
 		if m.cursor == len(m.projects) {
 			padding := layout.InnerWidth - len(createLine)
 			if padding > 0 {
@@ -194,7 +194,7 @@ func (m ProjectSelectorModel) View() string {
 		b.WriteString("\n")
 
 		// Exit option
-		exitLine := "  Exit"
+		exitLine := "Exit"
 		if m.cursor == len(m.projects)+1 {
 			padding := layout.InnerWidth - len(exitLine)
 			if padding > 0 {
@@ -204,15 +204,23 @@ func (m ProjectSelectorModel) View() string {
 		} else {
 			b.WriteString(NormalStyle.Render(exitLine))
 		}
-		b.WriteString("\n\n")
-
-		b.WriteString(HintStyle.Render("Use j/k or arrows to navigate, Enter to select, q to quit"))
+		b.WriteString("\n")
 	}
 
 	// Use centralized border style with dynamic width from terminal and top margin
-	borderStyle := BorderStyle.Width(layout.ViewportWidth).MarginTop(1)
+	borderStyle := BorderStyle.Width(layout.ViewportWidth).Padding(1, 0).MarginTop(1)
+	
+	// Build final view with border and help text below
+	var result strings.Builder
+	result.WriteString(borderStyle.Render(b.String()))
+	
+	// Add help text outside the border (only in select mode)
+	if !m.createMode {
+		result.WriteString("\n")
+		result.WriteString(" " + HintStyle.Render("Use j/k or arrows to navigate, Enter to select, q to quit"))
+	}
 
-	return borderStyle.Render(b.String())
+	return result.String()
 }
 
 // Result returns the user's selection after the program exits

@@ -76,6 +76,14 @@ type gistFileEntry struct {
 	FileCount     int  // number of files in this gist (for divider display)
 }
 
+// profileRow represents a row in the user profile view
+type profileRow struct {
+	Label        string // e.g., "Username:", "Email:", "Docker Hub:"
+	DisplayValue string // e.g., "thesavant42", "None", "jbrashars@gmail.com"
+	URL          string // URL to open when Enter is pressed
+	IsClickable  bool   // Whether this row can be opened
+}
+
 // TUIModel holds the state for the interactive table
 type TUIModel struct {
 	table        table.Model
@@ -150,10 +158,11 @@ type TUIModel struct {
 	selectedUserEmail   string                  // email from commits (if available)
 	selectedUserName    string                  // name from commits (if available)
 	selectedUserProfile models.UserProfile      // full profile from DB
+	userProfileRows     []profileRow            // profile rows for tab 0
 	userRepos           []models.UserRepository // repos for selected user
 	userGists           []models.UserGist       // gists for selected user
 	userGistFiles       []gistFileEntry         // flattened gist files for display
-	userDetailTab       int                     // 0 = repos, 1 = gists/files
+	userDetailTab       int                     // 0 = profile, 1 = repos, 2 = gists
 	userDetailCursor    int                     // cursor position in detail view
 
 	// Processed users cache - logins with fetched data show [!] instead of [x]
@@ -1309,8 +1318,11 @@ func (m TUIModel) handleUserDetailView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "up", "k":
-		// Tab 0 is Profile (no list), Tab 1 is Repos, Tab 2 is Gists
-		if m.userDetailTab == 2 {
+		// Tab 0 = Profile, Tab 1 = Repos, Tab 2 = Gists
+		if m.userDetailTab == 0 && m.userDetailCursor > 0 {
+			// Navigate profile rows
+			m.userDetailCursor--
+		} else if m.userDetailTab == 2 {
 			// Skip dividers when navigating gists
 			for {
 				if m.userDetailCursor <= 0 {
@@ -1329,6 +1341,8 @@ func (m TUIModel) handleUserDetailView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "down", "j":
 		maxItems := 0
 		switch m.userDetailTab {
+		case 0:
+			maxItems = len(m.userProfileRows)
 		case 1:
 			maxItems = len(m.userRepos)
 		case 2:
@@ -1351,11 +1365,11 @@ func (m TUIModel) handleUserDetailView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "enter":
-		// Tab 0: Profile - open GitHub profile
-		if m.userDetailTab == 0 {
-			if m.selectedUserLogin != "" {
-				profileURL := fmt.Sprintf("https://github.com/%s", m.selectedUserLogin)
-				openURL(profileURL)
+		// Tab 0: Profile - open selected row's URL
+		if m.userDetailTab == 0 && m.userDetailCursor < len(m.userProfileRows) {
+			row := m.userProfileRows[m.userDetailCursor]
+			if row.IsClickable && row.URL != "" {
+				openURL(row.URL)
 			}
 			return m, nil
 		}
@@ -1466,6 +1480,195 @@ func (m *TUIModel) showUserDetail(login, name, email string) {
 		profile = models.UserProfile{Login: login}
 	}
 	m.selectedUserProfile = profile
+
+	// Build clickable profile rows
+	var profileRows []profileRow
+	
+	// Username - always clickable
+	profileRows = append(profileRows, profileRow{
+		Label:        "Username:",
+		DisplayValue: login,
+		URL:          fmt.Sprintf("https://github.com/%s", login),
+		IsClickable:  true,
+	})
+
+	// Name
+	displayName := profile.Name
+	if displayName == "" {
+		displayName = name
+	}
+	if displayName == "" {
+		displayName = "-"
+	}
+	profileRows = append(profileRows, profileRow{
+		Label:        "Name:",
+		DisplayValue: displayName,
+		URL:          "",
+		IsClickable:  false,
+	})
+
+	// Email
+	displayEmail := profile.Email
+	if displayEmail == "" {
+		displayEmail = email
+	}
+	if displayEmail != "" {
+		profileRows = append(profileRows, profileRow{
+			Label:        "Email:",
+			DisplayValue: displayEmail,
+			URL:          fmt.Sprintf("mailto:%s", displayEmail),
+			IsClickable:  true,
+		})
+	} else {
+		profileRows = append(profileRows, profileRow{
+			Label:        "Email:",
+			DisplayValue: "-",
+			URL:          "",
+			IsClickable:  false,
+		})
+	}
+
+	// Organizations - show all or placeholder if none
+	if len(profile.Organizations) > 0 {
+		for _, org := range profile.Organizations {
+			profileRows = append(profileRows, profileRow{
+				Label:        "Org:",
+				DisplayValue: org,
+				URL:          fmt.Sprintf("https://github.com/%s", org),
+				IsClickable:  true,
+			})
+		}
+	} else {
+		profileRows = append(profileRows, profileRow{
+			Label:        "Org:",
+			DisplayValue: "-",
+			URL:          "",
+			IsClickable:  false,
+		})
+	}
+
+	// Bio - not clickable
+	bio := profile.Bio
+	if bio != "" {
+		if len(bio) > 60 {
+			bio = bio[:57] + "..."
+		}
+	} else {
+		bio = "-"
+	}
+	profileRows = append(profileRows, profileRow{
+		Label:        "Bio:",
+		DisplayValue: bio,
+		URL:          "",
+		IsClickable:  false,
+	})
+
+	// Company - not clickable
+	company := profile.Company
+	if company == "" {
+		company = "-"
+	}
+	profileRows = append(profileRows, profileRow{
+		Label:        "Company:",
+		DisplayValue: company,
+		URL:          "",
+		IsClickable:  false,
+	})
+
+	// Location - not clickable
+	location := profile.Location
+	if location == "" {
+		location = "-"
+	}
+	profileRows = append(profileRows, profileRow{
+		Label:        "Location:",
+		DisplayValue: location,
+		URL:          "",
+		IsClickable:  false,
+	})
+
+	// Website - clickable if exists
+	if profile.WebsiteURL != "" {
+		profileRows = append(profileRows, profileRow{
+			Label:        "Website:",
+			DisplayValue: profile.WebsiteURL,
+			URL:          profile.WebsiteURL,
+			IsClickable:  true,
+		})
+	} else {
+		profileRows = append(profileRows, profileRow{
+			Label:        "Website:",
+			DisplayValue: "-",
+			URL:          "",
+			IsClickable:  false,
+		})
+	}
+
+	// Twitter - clickable if exists
+	if profile.TwitterUsername != "" {
+		profileRows = append(profileRows, profileRow{
+			Label:        "Twitter:",
+			DisplayValue: "@" + profile.TwitterUsername,
+			URL:          fmt.Sprintf("https://twitter.com/%s", profile.TwitterUsername),
+			IsClickable:  true,
+		})
+	} else {
+		profileRows = append(profileRows, profileRow{
+			Label:        "Twitter:",
+			DisplayValue: "-",
+			URL:          "",
+			IsClickable:  false,
+		})
+	}
+
+	// Pronouns - not clickable
+	pronouns := profile.Pronouns
+	if pronouns == "" {
+		pronouns = "-"
+	}
+	profileRows = append(profileRows, profileRow{
+		Label:        "Pronouns:",
+		DisplayValue: pronouns,
+		URL:          "",
+		IsClickable:  false,
+	})
+
+	// Followers - not clickable
+	followersText := "-"
+	if profile.FollowerCount > 0 || profile.Login != "" {
+		followersText = fmt.Sprintf("%d", profile.FollowerCount)
+	}
+	profileRows = append(profileRows, profileRow{
+		Label:        "Followers:",
+		DisplayValue: followersText,
+		URL:          "",
+		IsClickable:  false,
+	})
+
+	// Following - not clickable
+	followingText := "-"
+	if profile.FollowingCount > 0 || profile.Login != "" {
+		followingText = fmt.Sprintf("%d", profile.FollowingCount)
+	}
+	profileRows = append(profileRows, profileRow{
+		Label:        "Following:",
+		DisplayValue: followingText,
+		URL:          "",
+		IsClickable:  false,
+	})
+
+	// Social accounts - all clickable
+	for _, social := range profile.SocialAccounts {
+		providerName := formatProviderName(social.Provider)
+		profileRows = append(profileRows, profileRow{
+			Label:        providerName + ":",
+			DisplayValue: social.DisplayName,
+			URL:          social.URL,
+			IsClickable:  true,
+		})
+	}
+
+	m.userProfileRows = profileRows
 
 	// Load repos
 	repos, err := m.database.GetUserRepositories(login)
@@ -1755,21 +1958,26 @@ func (m TUIModel) View() string {
 	// Add top margin to avoid terminal edge
 	b.WriteString("\n")
 
-	// Render page indicator if multiple repos
+	// Build content inside border: tabs + table
+	var contentBuilder strings.Builder
+
+	// Render page indicator (tabs) if multiple repos
 	if len(m.repos) > 0 {
 		pageIndicator := m.renderPageIndicator()
-		b.WriteString(pageIndicator)
-		b.WriteString("\n")
+		contentBuilder.WriteString(pageIndicator)
+		contentBuilder.WriteString("\n\n")
 	}
 
-	// Render the table with border and custom row colors for links
+	// Render the table with custom row colors for links
 	tableView := m.renderTableWithLinks()
+	contentBuilder.WriteString(tableView)
 
-	// Add border around table using centralized style with dynamic width
-	borderedTable := BorderStyle.
+	// Add border around content (tabs + table) using centralized style with dynamic width
+	borderedContent := BorderStyle.
 		Width(m.layout.ViewportWidth).
-		Render(tableView)
-	b.WriteString(borderedTable)
+		Padding(1, 0).
+		Render(contentBuilder.String())
+	b.WriteString(borderedContent)
 	b.WriteString("\n")
 
 	// Render progress bar if active
@@ -2011,7 +2219,7 @@ func (m TUIModel) renderAddRepo() string {
 	b.WriteString(HintStyle.Render("Enter: add repository | Esc: cancel"))
 
 	// Add border with width from layout
-	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).MarginTop(1)
+	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).Padding(1, 0).MarginTop(1)
 
 	return borderStyle.Render(b.String())
 }
@@ -2025,7 +2233,7 @@ func (m TUIModel) renderFormOverlay(formView string, title string) string {
 	b.WriteString(formView)
 
 	// Add border with width from layout
-	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).MarginTop(1)
+	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).Padding(1, 0).MarginTop(1)
 
 	return borderStyle.Render(b.String())
 }
@@ -2046,7 +2254,7 @@ func (m TUIModel) renderFetchPrompt() string {
 	b.WriteString(HintStyle.Render("Y: Fetch commits | N/Esc: Skip"))
 
 	// Add border with width from layout
-	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).MarginTop(1)
+	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).Padding(1, 0).MarginTop(1)
 
 	return borderStyle.Render(b.String())
 }
@@ -2058,17 +2266,17 @@ func (m TUIModel) renderQueryProgress() string {
 	b.WriteString(TitleStyle.Render("Querying Tagged Users"))
 	b.WriteString("\n\n")
 
-	b.WriteString(ProgressStyle.Render(m.queryProgress))
+	b.WriteString(" " + ProgressStyle.Render(m.queryProgress))
 	b.WriteString("\n\n")
 
 	// Render animated progress bar
 	if m.showProgress {
 		progressView := m.progressBar.ViewAs(m.progressPercent)
-		b.WriteString(progressView)
+		b.WriteString(" " + progressView)
 		b.WriteString("\n\n")
 	}
 
-	b.WriteString(fmt.Sprintf("Completed: %d / %d", m.queryCompleted, m.queryTotal))
+	b.WriteString(" " + fmt.Sprintf("Completed: %d / %d", m.queryCompleted, m.queryTotal))
 	if m.queryFailed > 0 {
 		b.WriteString(fmt.Sprintf(" (Failed: %d)", m.queryFailed))
 	}
@@ -2077,6 +2285,7 @@ func (m TUIModel) renderQueryProgress() string {
 	// Add border with width from layout
 	borderStyle := BorderStyle.
 		Width(m.layout.ViewportWidth).
+		Padding(1, 0).
 		MarginTop(1)
 
 	return borderStyle.Render(b.String())
@@ -2120,128 +2329,32 @@ func (m TUIModel) renderUserDetail() string {
 
 	// Content based on active tab
 	if m.userDetailTab == 0 {
-		// Profile tab - show user info from DB profile + commit data
-		p := m.selectedUserProfile
+		// Profile tab - render as list with selector
 		b.WriteString(NormalStyle.Render("GitHub Profile"))
 		b.WriteString("\n")
 		b.WriteString(strings.Repeat("─", m.layout.InnerWidth))
-		b.WriteString("\n\n")
-
-		// Username (always show)
-		b.WriteString(NormalStyle.Render("Username:   "))
-		b.WriteString(AccentStyle.Render(m.selectedUserLogin))
 		b.WriteString("\n")
 
-		// Name - prefer profile, fallback to commit data
-		displayName := p.Name
-		if displayName == "" {
-			displayName = m.selectedUserName
-		}
-		b.WriteString(NormalStyle.Render("Name:       "))
-		if displayName != "" {
-			b.WriteString(NormalStyle.Render(displayName))
-		} else {
-			b.WriteString(NormalStyle.Render("-"))
-		}
-		b.WriteString("\n")
-
-		// Email - prefer profile, fallback to commit data
-		displayEmail := p.Email
-		if displayEmail == "" {
-			displayEmail = m.selectedUserEmail
-		}
-		b.WriteString(NormalStyle.Render("Email:      "))
-		if displayEmail != "" {
-			b.WriteString(NormalStyle.Render(displayEmail))
-		} else {
-			b.WriteString(NormalStyle.Render("-"))
-		}
-		b.WriteString("\n")
-
-		// Bio
-		b.WriteString(NormalStyle.Render("Bio:        "))
-		if p.Bio != "" {
-			// Truncate long bios
-			bio := p.Bio
-			if len(bio) > 60 {
-				bio = bio[:57] + "..."
+		// Render profile rows with selector
+		for i, row := range m.userProfileRows {
+			// Format label with consistent width
+			labelWidth := 12
+			label := row.Label
+			if len(label) < labelWidth {
+				label += strings.Repeat(" ", labelWidth-len(label))
 			}
-			b.WriteString(NormalStyle.Render(bio))
-		} else {
-			b.WriteString(NormalStyle.Render("-"))
-		}
-		b.WriteString("\n")
-
-		// Company
-		b.WriteString(NormalStyle.Render("Company:    "))
-		if p.Company != "" {
-			b.WriteString(NormalStyle.Render(p.Company))
-		} else {
-			b.WriteString(NormalStyle.Render("-"))
-		}
-		b.WriteString("\n")
-
-		// Location
-		b.WriteString(NormalStyle.Render("Location:   "))
-		if p.Location != "" {
-			b.WriteString(NormalStyle.Render(p.Location))
-		} else {
-			b.WriteString(NormalStyle.Render("-"))
-		}
-		b.WriteString("\n")
-
-		// Website
-		b.WriteString(NormalStyle.Render("Website:    "))
-		if p.WebsiteURL != "" {
-			b.WriteString(NormalStyle.Render(p.WebsiteURL))
-		} else {
-			b.WriteString(NormalStyle.Render("-"))
-		}
-		b.WriteString("\n")
-
-		// Twitter
-		b.WriteString(NormalStyle.Render("Twitter:    "))
-		if p.TwitterUsername != "" {
-			b.WriteString(NormalStyle.Render("@" + p.TwitterUsername))
-		} else {
-			b.WriteString(NormalStyle.Render("-"))
-		}
-		b.WriteString("\n")
-
-		// Pronouns
-		b.WriteString(NormalStyle.Render("Pronouns:   "))
-		if p.Pronouns != "" {
-			b.WriteString(NormalStyle.Render(p.Pronouns))
-		} else {
-			b.WriteString(NormalStyle.Render("-"))
-		}
-		b.WriteString("\n")
-
-		// Followers/Following
-		b.WriteString(NormalStyle.Render("Followers:  "))
-		if p.FollowerCount > 0 || p.Login != "" {
-			b.WriteString(NormalStyle.Render(fmt.Sprintf("%d", p.FollowerCount)))
-			b.WriteString(NormalStyle.Render("  |  Following: "))
-			b.WriteString(NormalStyle.Render(fmt.Sprintf("%d", p.FollowingCount)))
-		} else {
-			b.WriteString(NormalStyle.Render("-"))
-		}
-		b.WriteString("\n")
-
-		// Social accounts
-		if len(p.SocialAccounts) > 0 {
-			b.WriteString(NormalStyle.Render("Socials:    "))
-			for i, social := range p.SocialAccounts {
-				if i > 0 {
-					b.WriteString(NormalStyle.Render(", "))
-				}
-				b.WriteString(AccentStyle.Render(social.Provider + ": " + social.DisplayName))
+			
+			// Format full line
+			line := label + row.DisplayValue
+			
+			// Apply selector highlighting
+			if i == m.userDetailCursor {
+				b.WriteString(SelectedStyle.Width(m.layout.InnerWidth).Render(line))
+			} else {
+				b.WriteString(NormalStyle.Render(line))
 			}
 			b.WriteString("\n")
 		}
-
-		b.WriteString("\n")
-		b.WriteString(HintStyle.Render("Press Enter to open profile in browser"))
 	} else if m.userDetailTab == 1 {
 		// Repos tab
 		if len(m.userRepos) == 0 {
@@ -2285,15 +2398,13 @@ func (m TUIModel) renderUserDetail() string {
 				b.WriteString("\n")
 			}
 		}
-		b.WriteString("\n")
-		b.WriteString(HintStyle.Render("Press Enter to open in browser"))
 	} else if m.userDetailTab == 2 {
 		// Gists tab - show files
 		if len(m.userGistFiles) == 0 {
 			b.WriteString(HintStyle.Render("No gist files found."))
 		} else {
-			// Show header with GUID column (indented to match file rows)
-			b.WriteString(NormalStyle.Render(fmt.Sprintf("  %-26s %-10s %-7s %-4s %-10s %-32s", "Filename", "Language", "Size", "Rev", "Updated", "GUID")))
+			// Show header with GUID and Count columns
+			b.WriteString(NormalStyle.Render(fmt.Sprintf("%-50s %-10s %-7s %-4s %-10s  %-32s  %-10s", "Filename", "Language", "Size", "Rev", "Updated", "GUID", "Count")))
 			b.WriteString("\n")
 			b.WriteString(strings.Repeat("─", m.layout.InnerWidth))
 			b.WriteString("\n")
@@ -2308,34 +2419,22 @@ func (m TUIModel) renderUserDetail() string {
 				endIdx = len(m.userGistFiles)
 			}
 
+			// Track gist info for the next file row
+			var pendingGistInfo *gistFileEntry
+			
 			for i := startIdx; i < endIdx; i++ {
 				file := m.userGistFiles[i]
 
 				// Check if this is a divider row
 				if file.IsDivider {
-					// Show label on separate line
-					filesWord := "file"
-					if file.FileCount != 1 {
-						filesWord = "files"
-					}
-					updated := file.UpdatedAt
-					if len(updated) > 10 {
-						updated = updated[:10]
-					}
-					label := fmt.Sprintf("  %d %s · %s", file.FileCount, filesWord, updated)
-					b.WriteString(NormalStyle.Render(label))
-					b.WriteString("\n")
-
-					// Render solid white divider spanning full width
-					dividerText := strings.Repeat("─", m.layout.InnerWidth)
-					b.WriteString(dividerText)
-					b.WriteString("\n")
+					// Store gist info to apply to the next file (first file in this gist)
+					pendingGistInfo = &file
 					continue
 				}
 
 				name := file.FileName
-				if len(name) > 26 {
-					name = name[:23] + "..."
+				if len(name) > 50 {
+					name = name[:47] + "..."
 				}
 				lang := file.Language
 				if lang == "" {
@@ -2349,38 +2448,62 @@ func (m TUIModel) renderUserDetail() string {
 				if file.Size >= 1024 {
 					sizeStr = fmt.Sprintf("%.1fKB", float64(file.Size)/1024)
 				}
-				// Format date (just show date part)
-				updated := file.UpdatedAt
-				if len(updated) > 10 {
-					updated = updated[:10]
+				
+				// If this is the first file in a gist, show gist info
+				var updated, guid, countLabel string
+				if pendingGistInfo != nil {
+					filesWord := "file"
+					if pendingGistInfo.FileCount != 1 {
+						filesWord = "files"
+					}
+					updated = pendingGistInfo.UpdatedAt
+					if len(updated) > 10 {
+						updated = updated[:10]
+					}
+					guid = pendingGistInfo.GistID
+					if len(guid) > 32 {
+						guid = guid[len(guid)-32:]
+					}
+					countLabel = fmt.Sprintf("%d %s", pendingGistInfo.FileCount, filesWord)
+					pendingGistInfo = nil // Clear it after using
 				}
-				// Extract GUID from GistID (remove prefix if present)
-				guid := file.GistID
-				if len(guid) > 32 {
-					guid = guid[len(guid)-32:]
-				}
-				line := fmt.Sprintf("  %-26s %-10s %-7s %-4d %-10s %-32s", name, lang, sizeStr, file.RevisionCount, updated, guid)
+				
+				line := fmt.Sprintf("%-50s %-10s %-7s %-4d %-10s  %-32s  %-10s", name, lang, sizeStr, file.RevisionCount, updated, guid, countLabel)
 				if i == m.userDetailCursor {
 					b.WriteString(SelectedStyle.Width(m.layout.InnerWidth).Render(line))
 				} else {
 					b.WriteString(NormalStyle.Render(line))
 				}
 				b.WriteString("\n")
+				
+				// Add divider AFTER last file in gist if next item is a divider
+				isLastInView := (i == endIdx-1)
+				isLastInList := (i == len(m.userGistFiles)-1)
+				nextIsDivider := !isLastInList && i+1 < len(m.userGistFiles) && m.userGistFiles[i+1].IsDivider
+				
+				if nextIsDivider && !isLastInView {
+					// Render divider to separate gist groups
+					dividerText := strings.Repeat("─", m.layout.InnerWidth)
+					b.WriteString(dividerText)
+					b.WriteString("\n")
+				}
 			}
 		}
-		b.WriteString("\n")
-		b.WriteString(HintStyle.Render("Press Enter to open in browser"))
 	}
-
-	b.WriteString("\n")
-	b.WriteString(HintStyle.Render("left/right: switch tabs | j/k: navigate | Enter: open in browser | p: profile | Esc: back"))
 
 	// Add border with width from layout
 	borderStyle := BorderStyle.
 		Width(m.layout.ViewportWidth).
+		Padding(1, 0).
 		MarginTop(1)
 
-	return borderStyle.Render(b.String())
+	// Build final view with border and help text below
+	var result strings.Builder
+	result.WriteString(borderStyle.Render(b.String()))
+	result.WriteString("\n")
+	result.WriteString(" " + HintStyle.Render("left/right: switch tabs | j/k: navigate | Enter: open in browser | p: profile | Esc: back"))
+
+	return result.String()
 }
 
 // renderFetchProgress renders the fetch progress screen
@@ -2405,7 +2528,7 @@ func (m TUIModel) renderFetchProgress() string {
 	}
 
 	// Add border with width from layout
-	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).MarginTop(1)
+	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).Padding(1, 0).MarginTop(1)
 
 	return borderStyle.Render(b.String())
 }
@@ -2433,7 +2556,7 @@ func (m TUIModel) renderMenu() string {
 	b.WriteString(HintStyle.Render("Enter: select | Esc: close"))
 
 	// Add border around menu with width from layout
-	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).MarginTop(1)
+	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).Padding(1, 1).MarginTop(1)
 
 	return borderStyle.Render(b.String())
 }
@@ -2478,7 +2601,7 @@ func (m TUIModel) renderDomainConfig() string {
 	}
 
 	// Add border around config screen with width from layout
-	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).MarginTop(1)
+	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).Padding(1, 1).MarginTop(1)
 
 	return borderStyle.Render(b.String())
 }
@@ -2691,6 +2814,23 @@ func RunMultiRepoTUI(
 		return true, nil
 	}
 	return false, nil
+}
+
+// formatProviderName converts provider names to display format
+func formatProviderName(provider string) string {
+	switch provider {
+	case "DOCKERHUB":
+		return "Docker Hub"
+	case "TWITTER":
+		return "Twitter"
+	case "LINKEDIN":
+		return "LinkedIn"
+	case "FACEBOOK":
+		return "Facebook"
+	default:
+		// Title case for others
+		return strings.Title(strings.ToLower(provider))
+	}
 }
 
 // openURL opens a URL in the default browser (cross-platform)
