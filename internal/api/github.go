@@ -179,13 +179,28 @@ func parseNextLink(linkHeader string) string {
 	return ""
 }
 
+// sanitizeInput removes null bytes and other invisible control characters from input
+func sanitizeInput(s string) string {
+	// Remove null bytes and other control characters (except whitespace)
+	result := strings.Map(func(r rune) rune {
+		// Keep printable characters and normal whitespace (space, tab, newline)
+		if r == 0 || (r < 32 && r != '\t' && r != '\n' && r != '\r') {
+			return -1 // Remove the character
+		}
+		return r
+	}, s)
+	return result
+}
+
 // ParseRepoString parses "owner/repo" format into owner and repo
 func ParseRepoString(repoStr string) (owner, repo string, err error) {
+	// Sanitize input to remove null bytes and control characters
+	repoStr = sanitizeInput(repoStr)
 	parts := strings.Split(strings.TrimSpace(repoStr), "/")
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return "", "", fmt.Errorf("invalid repository format: expected 'owner/repo', got '%s'", repoStr)
 	}
-	return parts[0], parts[1], nil
+	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), nil
 }
 
 // ParseCommitsFromJSON parses commits from JSON bytes (for loading from files)

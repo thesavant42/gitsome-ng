@@ -619,6 +619,23 @@ func (db *DB) DeleteCommitterByEmail(repoOwner, repoName, email string) error {
 	return nil
 }
 
+// DeleteRepositoryData removes all commits, tags, and links for a repository
+func (db *DB) DeleteRepositoryData(repoOwner, repoName string) error {
+	// Delete all commits for this repo
+	_, err := db.conn.Exec("DELETE FROM commits WHERE repo_owner = ? AND repo_name = ?", repoOwner, repoName)
+	if err != nil {
+		return fmt.Errorf("failed to delete repository commits: %w", err)
+	}
+	
+	// Delete all tags for this repo
+	db.conn.Exec("DELETE FROM committer_tags WHERE repo_owner = ? AND repo_name = ?", repoOwner, repoName)
+	
+	// Delete all links for this repo
+	db.conn.Exec("DELETE FROM committer_links WHERE repo_owner = ? AND repo_name = ?", repoOwner, repoName)
+	
+	return nil
+}
+
 // UpdateCommitterLogin updates the GitHub login for a committer
 func (db *DB) UpdateCommitterLogin(repoOwner, repoName, email, login string) error {
 	_, err := db.conn.Exec(updateCommitterLogin, login, repoOwner, repoName, email)

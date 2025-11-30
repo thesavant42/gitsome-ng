@@ -13,3 +13,5 @@ __pycache__/
 !README.md
 *.log
 /4phils.png
+/api.log
+/Redboxquarter.ogg

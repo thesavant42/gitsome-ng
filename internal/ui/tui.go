@@ -339,11 +339,13 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Handle async fetch messages
 	case fetchProgressMsg:
 		m.fetchProgress = fmt.Sprintf("Fetching commits... %d fetched (page %d)", msg.fetched, msg.page)
-		// Show progress bar during fetch (indeterminate progress since we don't know total)
+		// Show progress bar during fetch
 		m.showProgress = true
-		m.progressLabel = fmt.Sprintf("Fetching commits... page %d", msg.page)
-		// Use a pulsing effect by setting a moderate progress value
-		m.progressPercent = 0.5
+		m.progressLabel = fmt.Sprintf("Fetching commits... %d commits (page %d)", msg.fetched, msg.page)
+		// Increment progress with each page (asymptotic approach - never quite reaches 100%)
+		// Page 1: 50%, Page 2: 75%, Page 3: 87.5%, etc.
+		divisor := float64(uint(1) << uint(msg.page))
+		m.progressPercent = 1.0 - (1.0 / divisor)
 		// SetPercent returns a command that triggers animation
 		return m, m.progressBar.SetPercent(m.progressPercent)
 
@@ -519,7 +521,7 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.fetchProgress = "Starting fetch..."
 				// Show progress bar from the start
 				m.showProgress = true
-				m.progressPercent = 0.5 // Indeterminate progress for fetching
+				m.progressPercent = 0.0 // Start at 0, will increment as pages are fetched
 				m.progressLabel = "Fetching commits..."
 				// Trigger animation and start fetch
 				cmd := m.progressBar.SetPercent(m.progressPercent)
@@ -721,7 +723,7 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-		case "u", "U":
+		case "u":
 			// Unlink current row
 			cursor := m.table.Cursor()
 			if cursor >= 0 && cursor < len(m.stats) {
@@ -730,6 +732,100 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.database != nil {
 					m.database.RemoveLink(m.repoOwner, m.repoName, email)
 				}
+			}
+			return m, nil
+
+		case "U":
+			// Query Tagged Users (from repository page, not combined view)
+			if m.showCombined {
+				m.exportMessage = "Query users not available on combined view - switch to a specific repository"
+			} else if m.token == "" {
+				m.exportMessage = "GitHub token required for user queries"
+			} else if m.database != nil {
+				// Get tagged users with GitHub logins
+				taggedUsers, err := m.database.GetTaggedUsersWithLogins(m.repoOwner, m.repoName)
+				if err != nil || len(taggedUsers) == 0 {
+					m.exportMessage = "No tagged users with GitHub logins found"
+				} else {
+					// Filter out already processed users (those showing [!])
+					var logins []string
+					seenLogins := make(map[string]bool)
+					for _, u := range taggedUsers {
+						// Skip users who have already been processed
+						if m.processedLogins != nil && m.processedLogins[u.GitHubLogin] {
+							continue
+						}
+						// Skip duplicate logins (user may have multiple tagged emails)
+						if seenLogins[u.GitHubLogin] {
+							continue
+						}
+						seenLogins[u.GitHubLogin] = true
+						logins = append(logins, u.GitHubLogin)
+					}
+					if len(logins) == 0 {
+						m.exportMessage = "All tagged users have already been processed"
+					} else {
+						// Start querying users
+						m.queryingUsers = true
+						m.queryTotal = len(logins)
+						m.queryCompleted = 0
+						m.queryFailed = 0
+						// Show progress bar from the start
+						m.showProgress = true
+						m.progressPercent = 0.0
+						m.progressLabel = fmt.Sprintf("Querying users... 0/%d", len(logins))
+						if len(logins) > 1 {
+							m.queryLoginsToFetch = logins[1:]
+						}
+						// Trigger animation and start query
+						cmd := m.progressBar.SetPercent(m.progressPercent)
+						return m, tea.Batch(cmd, m.startUserQuery(logins[0], 1, m.queryTotal))
+					}
+				}
+			}
+			return m, nil
+
+		case "A":
+			// Add Repository (skip menu)
+			m.addRepoVisible = true
+			m.addRepoInput = ""
+			m.addRepoInputActive = true
+			return m, nil
+
+		case "X":
+			// Export Project Report (skip menu)
+			if m.database != nil {
+				filename, err := ExportProjectReport(m.database, m.dbPath)
+				if err != nil {
+					m.exportMessage = fmt.Sprintf("Project report failed: %v", err)
+				} else {
+					m.exportMessage = fmt.Sprintf("Project report exported to %s", filename)
+				}
+			}
+			return m, nil
+
+		case "R":
+			// Delete current repository (only works on specific repo page, not combined view)
+			if !m.showCombined && m.currentRepoIndex >= 0 && m.currentRepoIndex < len(m.repos) {
+				repo := m.repos[m.currentRepoIndex]
+				m.deleteTargetIndex = m.currentRepoIndex
+				m.deleteTargetType = "tracked_repo"
+
+				m.deleteConfirmForm = huh.NewForm(
+					huh.NewGroup(
+						huh.NewConfirm().
+							Key("confirm").
+							Title(fmt.Sprintf("Delete repository '%s/%s'?", repo.Owner, repo.Name)).
+							Description("This will remove the repository and all its commits from the database.").
+							Affirmative("Yes, delete").
+							Negative("Cancel"),
+					),
+				).WithTheme(NewAppTheme())
+
+				m.deleteConfirmVisible = true
+				return m, m.deleteConfirmForm.Init()
+			} else if m.showCombined {
+				m.exportMessage = "Cannot delete repository from combined view - switch to a specific repository"
 			}
 			return m, nil
 
@@ -1038,7 +1134,7 @@ func (m TUIModel) handleAddRepoInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "enter":
 		// Parse and add the repository
-		input := strings.TrimSpace(m.addRepoInput)
+		input := sanitizeInput(strings.TrimSpace(m.addRepoInput))
 		if input != "" {
 			parts := strings.Split(input, "/")
 			if len(parts) == 2 {
@@ -1760,6 +1856,40 @@ func (m *TUIModel) executeDelete() {
 			m.exportMessage = fmt.Sprintf("Deleted committer: %s", s.Email)
 		}
 
+	case "tracked_repo":
+		if m.deleteTargetIndex >= 0 && m.deleteTargetIndex < len(m.repos) {
+			repo := m.repos[m.deleteTargetIndex]
+
+			// Remove from database
+			if m.database != nil {
+				// Delete all commits for this repository
+				m.database.DeleteRepositoryData(repo.Owner, repo.Name)
+				// Remove from tracked repos
+				m.database.RemoveTrackedRepo(repo.Owner, repo.Name)
+			}
+
+			// Remove from in-memory repos list
+			m.repos = append(m.repos[:m.deleteTargetIndex], m.repos[m.deleteTargetIndex+1:]...)
+
+			// Switch to another repo or combined view
+			if len(m.repos) == 0 {
+				// No repos left, clear everything
+				m.showCombined = false
+				m.currentRepoIndex = -1
+				m.stats = nil
+				m.updateRows()
+			} else if m.deleteTargetIndex >= len(m.repos) {
+				// Deleted last repo, go to previous
+				m.currentRepoIndex = len(m.repos) - 1
+				m.switchToRepo(m.currentRepoIndex)
+			} else {
+				// Stay at same index (which now points to next repo)
+				m.switchToRepo(m.deleteTargetIndex)
+			}
+
+			m.exportMessage = fmt.Sprintf("Deleted repository: %s/%s", repo.Owner, repo.Name)
+		}
+
 	case "repo":
 		if m.deleteTargetIndex >= 0 && m.deleteTargetIndex < len(m.userRepos) {
 			repo := m.userRepos[m.deleteTargetIndex]
@@ -2003,9 +2133,13 @@ Keyboard Controls:
   left/right     Switch between repositories
   L              Select/deselect row for linking (yellow = pending)
   Esc            Commit selected rows as a link group
-  U              Unlink current row from its group
+  u              Unlink current row from its group
+  U              Query tagged users (fetches GitHub data)
   T              Toggle tag [ ]/[x], or clear [!] for re-scan
-  M              Open menu
+  A              Add repository (quick add, skips menu)
+  R              Remove current repository (with confirmation)
+  X              Export project report (all repos summary)
+  M              Open menu (all options)
   ?              Toggle this help
   q              Quit
 

@@ -8,6 +8,19 @@ import (
 	"github.com/charmbracelet/huh"
 )
 
+// sanitizeInput removes null bytes and other invisible control characters from input
+func sanitizeInput(s string) string {
+	// Remove null bytes and other control characters (except whitespace)
+	result := strings.Map(func(r rune) rune {
+		// Keep printable characters and normal whitespace (space, tab, newline)
+		if r == 0 || (r < 32 && r != '\t' && r != '\n' && r != '\r') {
+			return -1 // Remove the character
+		}
+		return r
+	}, s)
+	return result
+}
+
 // PromptForRepo prompts the user to enter a repository in owner/repo format
 func PromptForRepo() (owner, repo string, err error) {
 	var repoInput string
@@ -38,8 +51,10 @@ func PromptForRepo() (owner, repo string, err error) {
 		return "", "", fmt.Errorf("prompt cancelled: %w", err)
 	}
 
+	// Sanitize input to remove null bytes and control characters
+	repoInput = sanitizeInput(repoInput)
 	parts := strings.Split(strings.TrimSpace(repoInput), "/")
-	return parts[0], parts[1], nil
+	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), nil
 }
 
 // PromptForGitHubToken optionally prompts for a GitHub token
