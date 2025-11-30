@@ -391,3 +391,29 @@
 2025-11-30T00:18:22-08:00 INFO API: POST GraphQL endpoint=https://api.github.com/graphql login=thomasvs
 2025-11-30T00:18:27-08:00 INFO API: Checking Docker Hub profile login=thomasvs
 2025-11-30T00:18:28-08:00 INFO API: Docker Hub profile found login=thomasvs
+2025-11-30T00:51:22-08:00 INFO API: GET endpoint="https://api.github.com/repos/RaspberryPiFoundation/puppet-monit/commits?per_page=100"
+2025-11-30T00:53:23-08:00 INFO API: GET endpoint="https://api.github.com/repos/raspberrypi/bmap2simg/commits?per_page=100"
+2025-11-30T00:53:41-08:00 INFO API: POST GraphQL endpoint=https://api.github.com/graphql login=roliver-rpi
+2025-11-30T00:53:42-08:00 INFO API: Checking Docker Hub profile login=roliver-rpi
+2025-11-30T00:53:42-08:00 INFO API: No Docker Hub profile found login=roliver-rpi
+2025-11-30T07:58:32-08:00 INFO API: GET endpoint="https://api.github.com/repos/raspberrypi/rpi-firmware/commits?per_page=100"
+2025-11-30T07:58:33-08:00 INFO API: GET endpoint="https://api.github.com/repositories/418458352/commits?per_page=100&page=2"
+2025-11-30T07:58:33-08:00 INFO API: GET endpoint="https://api.github.com/repositories/418458352/commits?per_page=100&page=3"
+2025-11-30T07:58:33-08:00 INFO API: GET endpoint="https://api.github.com/repositories/418458352/commits?per_page=100&page=4"
+2025-11-30T07:58:34-08:00 INFO API: GET endpoint="https://api.github.com/repositories/418458352/commits?per_page=100&page=5"
+2025-11-30T07:58:34-08:00 INFO API: GET endpoint="https://api.github.com/repositories/418458352/commits?per_page=100&page=6"
+2025-11-30T07:58:34-08:00 INFO API: GET endpoint="https://api.github.com/repositories/418458352/commits?per_page=100&page=7"
+2025-11-30T07:58:35-08:00 INFO API: GET endpoint="https://api.github.com/repositories/418458352/commits?per_page=100&page=8"
+2025-11-30T07:58:35-08:00 INFO API: GET endpoint="https://api.github.com/repositories/418458352/commits?per_page=100&page=9"
+2025-11-30T07:58:35-08:00 INFO API: GET endpoint="https://api.github.com/repositories/418458352/commits?per_page=100&page=10"
+2025-11-30T07:58:36-08:00 INFO API: GET endpoint="https://api.github.com/repositories/418458352/commits?per_page=100&page=11"
+2025-11-30T07:58:36-08:00 INFO API: GET endpoint="https://api.github.com/repositories/418458352/commits?per_page=100&page=12"
+2025-11-30T07:58:36-08:00 INFO API: GET endpoint="https://api.github.com/repositories/418458352/commits?per_page=100&page=13"
+2025-11-30T07:58:37-08:00 INFO API: GET endpoint="https://api.github.com/repositories/418458352/commits?per_page=100&page=14"
+2025-11-30T07:58:37-08:00 INFO API: GET endpoint="https://api.github.com/repositories/418458352/commits?per_page=100&page=15"
+2025-11-30T07:58:58-08:00 INFO API: POST GraphQL endpoint=https://api.github.com/graphql login=gosuto-inzasheru
+2025-11-30T07:59:02-08:00 INFO API: Checking Docker Hub profile login=gosuto-inzasheru
+2025-11-30T07:59:03-08:00 INFO API: No Docker Hub profile found login=gosuto-inzasheru
+2025-11-30T07:59:03-08:00 INFO API: POST GraphQL endpoint=https://api.github.com/graphql login=Hexxeh
+2025-11-30T07:59:06-08:00 INFO API: Checking Docker Hub profile login=Hexxeh
+2025-11-30T07:59:06-08:00 ERRO API: Docker Hub check failed login=Hexxeh error="unexpected status code: 302"

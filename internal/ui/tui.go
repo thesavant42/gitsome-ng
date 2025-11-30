@@ -2127,25 +2127,56 @@ func (m TUIModel) View() string {
 
 	// Footer: stats on left, help in center, total commits on right
 	if m.helpVisible {
-		help := `
-Keyboard Controls:
-  j/k or up/down Navigate rows
-  left/right     Switch between repositories
-  L              Select/deselect row for linking (yellow = pending)
-  Esc            Commit selected rows as a link group
-  u              Unlink current row from its group
-  U              Query tagged users (fetches GitHub data)
-  T              Toggle tag [ ]/[x], or clear [!] for re-scan
-  A              Add repository (quick add, skips menu)
-  R              Remove current repository (with confirmation)
-  X              Export project report (all repos summary)
-  M              Open menu (all options)
-  ?              Toggle this help
-  q              Quit
-
-Tags: [ ]=untagged, [x]=tagged, [!]=scanned (press T to clear for re-scan)
-`
-		b.WriteString(NormalStyle.Render(help))
+		// Two-column layout for keyboard controls
+		leftCol := []string{
+			"Keyboard Controls:",
+			"  j/k or up/down Navigate rows",
+			"  left/right     Switch between repositories",
+			"  L              Select/deselect row for linking (yellow = pending)",
+			"  Esc            Commit selected rows as a link group",
+			"  u              Unlink current row from its group",
+			"  U              Query tagged users (fetches GitHub data)",
+		}
+		
+		rightCol := []string{
+			"",
+			"  T              Toggle tag [ ]/[x], or clear [!] for re-scan",
+			"  A              Add repository (quick add, skips menu)",
+			"  R              Remove current repository (with confirmation)",
+			"  X              Export project report (all repos summary)",
+			"  M              Open menu (all options)",
+			"  ?              Toggle this help",
+			"  q              Quit",
+		}
+		
+		// Calculate left column width (find max length)
+		leftColWidth := 0
+		for _, line := range leftCol {
+			if len(line) > leftColWidth {
+				leftColWidth = len(line)
+			}
+		}
+		leftColWidth += 4 // Add spacing between columns
+		
+		// Build two-column help text with leading space for border padding
+		var helpBuilder strings.Builder
+		for i := 0; i < len(leftCol); i++ {
+			// Add leading space to respect border padding
+			helpBuilder.WriteString(" ")
+			// Pad left column to fixed width
+			paddedLeft := leftCol[i] + strings.Repeat(" ", leftColWidth-len(leftCol[i]))
+			helpBuilder.WriteString(paddedLeft)
+			helpBuilder.WriteString(rightCol[i])
+			helpBuilder.WriteString("\n")
+		}
+		
+		// Add empty line before tags
+		helpBuilder.WriteString("\n")
+		
+		// Add tags explanation at the bottom with leading space
+		helpBuilder.WriteString(" Tags: [ ]=untagged, [x]=tagged, [!]=scanned (press T to clear for re-scan)")
+		
+		b.WriteString(NormalStyle.Render(helpBuilder.String()))
 	} else {
 		// Build footer with three sections
 
