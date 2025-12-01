@@ -2,6 +2,14 @@
 
 GitHub commit analyzer with an interactive TUI for tracking committers across multiple repositories.
 
+## TL;DR
+
+### via GitHub (go install)
+
+```bash
+go install github.com/thesavant42/gitsome-ng/cmd/yolosint@latest
+```
+
 ## Features
 
 - Track multiple GitHub repositories in isolated projects
@@ -113,3 +121,4 @@ See [STYLE_GUIDE.md](STYLE_GUIDE.md) for complete details, examples, and the aud
 ## License
 
 See LICENSE file for details.
+
