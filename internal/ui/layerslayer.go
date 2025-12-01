@@ -135,12 +135,16 @@ func (d fsItemDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 
 	// Styles - follow style guide: white text, gray for diminished, yellow only for help
 	normalStyle := lipgloss.NewStyle().Foreground(ColorText)
-	selectedStyle := lipgloss.NewStyle().Foreground(ColorText).Background(ColorHighlight).Bold(true)
 	dirStyle := lipgloss.NewStyle().Foreground(ColorText)
-	dirSelectedStyle := lipgloss.NewStyle().Foreground(ColorText).Background(ColorHighlight).Bold(true)
 	sizeStyle := lipgloss.NewStyle().Foreground(ColorTextDim)
-	sizeSelectedStyle := lipgloss.NewStyle().Foreground(ColorText).Background(ColorHighlight)
 	cursorStyle := lipgloss.NewStyle().Foreground(ColorBorder)
+
+	// Full-width selection style for entire line
+	selectedLineStyle := lipgloss.NewStyle().
+		Foreground(ColorText).
+		Background(ColorHighlight).
+		Bold(true).
+		Width(d.width)
 
 	var name, info string
 	var isDir bool
@@ -166,40 +170,42 @@ func (d fsItemDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 		isDir = true
 	}
 
-	// Build the line
-	var cursor string
-	var nameRendered string
-	var infoRendered string
-
-	if selected {
-		cursor = cursorStyle.Render("> ")
-		if isDir {
-			nameRendered = dirSelectedStyle.Render(name)
-		} else {
-			nameRendered = selectedStyle.Render(name)
-		}
-		infoRendered = sizeSelectedStyle.Render(info)
-	} else {
-		cursor = "  "
-		if isDir {
-			nameRendered = dirStyle.Render(name)
-		} else {
-			nameRendered = normalStyle.Render(name)
-		}
-		infoRendered = sizeStyle.Render(info)
-	}
-
 	// Calculate padding for right-aligned info
-	availWidth := d.width - 4 // account for cursor and padding
-	nameLen := lipgloss.Width(nameRendered)
-	infoLen := lipgloss.Width(infoRendered)
+	// Account for cursor (2 chars) and some buffer
+	availWidth := d.width - 4
+	nameLen := len(name)
+	infoLen := len(info)
 	padding := availWidth - nameLen - infoLen
 	if padding < 2 {
 		padding = 2
 	}
 
-	line := cursor + nameRendered + strings.Repeat(" ", padding) + infoRendered
-	fmt.Fprint(w, line)
+	// Build the line content (plain text for layout calculation)
+	var cursor string
+	if selected {
+		cursor = "> "
+	} else {
+		cursor = "  "
+	}
+
+	lineContent := cursor + name + strings.Repeat(" ", padding) + info
+
+	if selected {
+		// Apply full-width selection style to entire line
+		fmt.Fprint(w, selectedLineStyle.Render(lineContent))
+	} else {
+		// Apply individual styles for unselected items
+		var nameRendered string
+		if isDir {
+			nameRendered = dirStyle.Render(name)
+		} else {
+			nameRendered = normalStyle.Render(name)
+		}
+		infoRendered := sizeStyle.Render(info)
+
+		line := cursorStyle.Render(cursor) + nameRendered + strings.Repeat(" ", padding) + infoRendered
+		fmt.Fprint(w, line)
+	}
 }
 
 // fsBrowserModel is the Bubble Tea model for filesystem browsing
@@ -253,7 +259,7 @@ func (m *fsBrowserModel) updateListItems() {
 		m.list = list.New(items, delegate, 0, 0)
 		m.list.SetShowStatusBar(true)
 		m.list.SetFilteringEnabled(true)
-		m.list.SetShowHelp(false) // We show our own help line
+		m.list.SetShowHelp(false)  // We show our own help line
 		m.list.SetShowTitle(false) // Title shown separately in View()
 		// Style the list to be compliant - white text, gray for diminished
 		m.list.Styles.StatusBar = lipgloss.NewStyle().Foreground(ColorTextDim)
@@ -595,7 +601,62 @@ func runLayerInspectorInternal(imageRef string, database *db.DB) error {
 		return nil
 	}
 
-	// 6. Interactive layer browsing
+	// 6. Batch mode vs Interactive mode
+	// Batch mode: fetch all layers upfront, then browse without prompts
+	isBatchMode := selectionInput == "" || strings.ToUpper(selectionInput) == "ALL"
+
+	if isBatchMode && database != nil {
+		// Batch mode with database - fetch all uncached layers first
+		fmt.Println()
+
+		// Check which layers are already cached
+		var uncachedIndices []int
+		var uncachedLayers []api.Layer
+		for _, idx := range indicesToPeek {
+			layer := manifest.Layers[idx]
+			existing, err := database.GetLayerInspectionByDigest(layer.Digest)
+			if err != nil || existing == nil || existing.Contents == "" {
+				uncachedIndices = append(uncachedIndices, idx)
+				uncachedLayers = append(uncachedLayers, layer)
+			}
+		}
+
+		if len(uncachedLayers) > 0 {
+			// Batch fetch uncached layers
+			fmt.Printf("Batch fetching %d uncached layers...\n", len(uncachedLayers))
+
+			var fetchErrs []error
+			err := spinner.New().
+				Title(fmt.Sprintf("Fetching %d layers from registry...", len(uncachedLayers))).
+				Action(func() {
+					fetchErrs = batchFetchLayers(client, imageRef, uncachedIndices, uncachedLayers, database)
+				}).
+				Run()
+
+			if err != nil {
+				fmt.Printf("Spinner error: %v\n", err)
+			}
+
+			// Report any errors
+			if len(fetchErrs) > 0 {
+				fmt.Printf("Warning: %d layer(s) failed to fetch:\n", len(fetchErrs))
+				for _, e := range fetchErrs {
+					fmt.Printf("  - %v\n", e)
+				}
+			}
+
+			successCount := len(uncachedLayers) - len(fetchErrs)
+			fmt.Printf("✓ %d layers cached successfully.\n", successCount)
+		} else {
+			fmt.Printf("✓ All %d layers already cached.\n", len(indicesToPeek))
+		}
+
+		// Launch batch browser for all layers
+		fmt.Println("Launching layer browser...")
+		return showBatchLayersForImage(database, imageRef, indicesToPeek, manifest.Layers)
+	}
+
+	// Interactive mode - existing behavior for specific selections or no database
 	currentIdx := 0
 	for {
 		if currentIdx >= len(indicesToPeek) {
@@ -1421,4 +1482,107 @@ func RunSearchCachedLayers(database *db.DB) error {
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err := p.Run()
 	return err
+}
+
+// batchFetchLayers fetches all specified layers and caches them to the database
+// Returns errors for any failed fetches (continues fetching remaining layers on error)
+func batchFetchLayers(client *api.RegistryClient, imageRef string, indices []int, layers []api.Layer, database *db.DB) []error {
+	var errors []error
+
+	for i, layer := range layers {
+		idx := indices[i]
+		entries, err := client.PeekLayerBlob(imageRef, layer.Digest)
+		if err != nil {
+			errors = append(errors, fmt.Errorf("layer %d (%s): %w", idx, layer.Digest[:12], err))
+			continue
+		}
+
+		// Save to database
+		contentsJSON, _ := json.Marshal(entries)
+		if err := database.SaveLayerInspection(imageRef, layer.Digest, idx, layer.Size, len(entries), string(contentsJSON)); err != nil {
+			errors = append(errors, fmt.Errorf("layer %d (save): %w", idx, err))
+		}
+	}
+
+	return errors
+}
+
+// showBatchLayersForImage shows a layer table for batch-fetched cached layers
+// This allows browsing all layers without prompts between each one
+func showBatchLayersForImage(database *db.DB, imageRef string, indices []int, manifestLayers []api.Layer) error {
+	// Build layer inspection list from cached data
+	var layers []db.LayerInspection
+	for _, idx := range indices {
+		if idx < 0 || idx >= len(manifestLayers) {
+			continue
+		}
+		layer := manifestLayers[idx]
+
+		// Get cached inspection
+		cached, err := database.GetLayerInspectionByDigest(layer.Digest)
+		if err != nil || cached == nil {
+			// Create a placeholder for uncached layers
+			layers = append(layers, db.LayerInspection{
+				ImageRef:    imageRef,
+				LayerDigest: layer.Digest,
+				LayerIndex:  idx,
+				LayerSize:   layer.Size,
+				EntryCount:  0,
+				Contents:    "",
+			})
+		} else {
+			// Use cached data but ensure correct index for this image
+			layers = append(layers, db.LayerInspection{
+				ID:          cached.ID,
+				ImageRef:    imageRef,
+				LayerDigest: cached.LayerDigest,
+				LayerIndex:  idx,
+				LayerSize:   cached.LayerSize,
+				EntryCount:  cached.EntryCount,
+				Contents:    cached.Contents,
+			})
+		}
+	}
+
+	if len(layers) == 0 {
+		fmt.Println("No layers available to browse.")
+		return nil
+	}
+
+	// Use the existing layer table browser in a loop
+	for {
+		model := newLayerTableModel(imageRef, layers)
+		p := tea.NewProgram(model, tea.WithAltScreen())
+		finalModel, err := p.Run()
+		if err != nil {
+			return fmt.Errorf("layer table error: %w", err)
+		}
+
+		m := finalModel.(layerTableModel)
+		if m.selected < 0 || m.selected >= len(layers) {
+			return nil // Back or invalid selection
+		}
+
+		layer := layers[m.selected]
+
+		// Parse contents
+		var entries []api.TarEntry
+		if layer.Contents != "" {
+			if err := json.Unmarshal([]byte(layer.Contents), &entries); err != nil {
+				fmt.Printf("Could not parse layer contents: %v\n", err)
+				continue
+			}
+		} else {
+			fmt.Printf("Layer %d has no cached contents.\n", layer.LayerIndex)
+			continue
+		}
+
+		// Launch filesystem browser
+		sizeStr := api.HumanReadableSize(layer.LayerSize)
+		layerInfo := fmt.Sprintf("Layer %d [%s] %s", layer.LayerIndex, layer.LayerDigest[:12], sizeStr)
+		if err := runFSBrowser(entries, layerInfo, imageRef, layer.LayerDigest, layer.LayerSize); err != nil {
+			return err
+		}
+		// After browsing, loop back to layer selection (no prompt)
+	}
 }

@@ -369,11 +369,19 @@ func (m DockerHubSearchModel) renderTableWithSelection() string {
 	cursor := m.table.Cursor()
 	headerLines := 2 // Header + border
 
+	// Calculate the width for the selection bar - match table content width
+	// Use layout width minus border padding (2 chars for border)
+	selectionWidth := m.layout.ViewportWidth - 4
+	if selectionWidth < 40 {
+		selectionWidth = 40
+	}
+
 	var result []string
 	for i, line := range lines {
 		dataRowIndex := i - headerLines
 		if dataRowIndex >= 0 && dataRowIndex == cursor {
-			result = append(result, SelectedStyle.Render(line))
+			// Apply selection style with constrained width to match table
+			result = append(result, SelectedStyle.Width(selectionWidth).Render(line))
 		} else {
 			result = append(result, line)
 		}
