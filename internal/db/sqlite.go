@@ -100,6 +100,12 @@ func New(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("failed to create API logs schema: %w", err)
 	}
 
+	// Initialize layer inspections table
+	if _, err := conn.Exec(createLayerInspectionsTable); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to create layer inspections schema: %w", err)
+	}
+
 	// Run migrations to add new columns to existing tables
 	// These will silently fail if columns already exist
 	migrations := []string{
@@ -109,6 +115,7 @@ func New(dbPath string) (*DB, error) {
 		"ALTER TABLE user_repositories ADD COLUMN license_name TEXT",
 		"ALTER TABLE user_gists ADD COLUMN fork_count INTEGER DEFAULT 0",
 		"ALTER TABLE user_profiles ADD COLUMN organizations TEXT",
+		"ALTER TABLE layer_inspections ADD COLUMN contents TEXT",
 	}
 	for _, migration := range migrations {
 		conn.Exec(migration) // Ignore errors - column may already exist
@@ -1255,6 +1262,244 @@ type LocalSearchResult struct {
 	Email       string
 	MatchType   string // "bio", "company", "location", "repo", "gist", "gist_file"
 	MatchSource string // The actual text that matched (repo name, gist desc, etc.)
+}
+
+// LayerInspection represents a record of a layer peek
+type LayerInspection struct {
+	ID           int
+	ImageRef     string
+	LayerDigest  string
+	LayerIndex   int
+	LayerSize    int64
+	EntryCount   int
+	Contents     string // JSON-encoded directory listing
+	Downloaded   bool
+	DownloadPath string
+	InspectedAt  time.Time
+}
+
+// SaveLayerInspection saves a layer inspection record to the database
+func (db *DB) SaveLayerInspection(imageRef, layerDigest string, layerIndex int, layerSize int64, entryCount int, contents string) error {
+	_, err := db.conn.Exec(insertLayerInspection, imageRef, layerDigest, layerIndex, layerSize, entryCount, contents, false, "")
+	if err != nil {
+		return fmt.Errorf("failed to save layer inspection: %w", err)
+	}
+	return nil
+}
+
+// GetLayerInspection retrieves a layer inspection by image ref and digest
+func (db *DB) GetLayerInspection(imageRef, layerDigest string) (*LayerInspection, error) {
+	var li LayerInspection
+	var inspectedAt string
+	var contents, downloadPath sql.NullString
+
+	err := db.conn.QueryRow(selectLayerInspection, imageRef, layerDigest).Scan(
+		&li.ID, &li.ImageRef, &li.LayerDigest, &li.LayerIndex, &li.LayerSize,
+		&li.EntryCount, &contents, &li.Downloaded, &downloadPath, &inspectedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil // Not found
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get layer inspection: %w", err)
+	}
+
+	li.Contents = contents.String
+	li.DownloadPath = downloadPath.String
+	li.InspectedAt, _ = parseTimestamp(inspectedAt)
+	return &li, nil
+}
+
+// GetLayerInspectionByDigest retrieves the most recent inspection for a layer digest (any image)
+func (db *DB) GetLayerInspectionByDigest(layerDigest string) (*LayerInspection, error) {
+	var li LayerInspection
+	var inspectedAt string
+	var contents, downloadPath sql.NullString
+
+	err := db.conn.QueryRow(selectLayerInspectionByDigest, layerDigest).Scan(
+		&li.ID, &li.ImageRef, &li.LayerDigest, &li.LayerIndex, &li.LayerSize,
+		&li.EntryCount, &contents, &li.Downloaded, &downloadPath, &inspectedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil // Not found
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get layer inspection by digest: %w", err)
+	}
+
+	li.Contents = contents.String
+	li.DownloadPath = downloadPath.String
+	li.InspectedAt, _ = parseTimestamp(inspectedAt)
+	return &li, nil
+}
+
+// GetLayerInspections retrieves recent layer inspections
+func (db *DB) GetLayerInspections(limit int) ([]LayerInspection, error) {
+	rows, err := db.conn.Query(selectLayerInspections, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query layer inspections: %w", err)
+	}
+	defer rows.Close()
+
+	var inspections []LayerInspection
+	for rows.Next() {
+		var li LayerInspection
+		var inspectedAt string
+		var contents, downloadPath sql.NullString
+
+		if err := rows.Scan(
+			&li.ID, &li.ImageRef, &li.LayerDigest, &li.LayerIndex, &li.LayerSize,
+			&li.EntryCount, &contents, &li.Downloaded, &downloadPath, &inspectedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan layer inspection: %w", err)
+		}
+
+		li.Contents = contents.String
+		li.DownloadPath = downloadPath.String
+		li.InspectedAt, _ = parseTimestamp(inspectedAt)
+		inspections = append(inspections, li)
+	}
+	return inspections, nil
+}
+
+// GetLayerInspectionsByImage retrieves all layer inspections for an image
+func (db *DB) GetLayerInspectionsByImage(imageRef string) ([]LayerInspection, error) {
+	rows, err := db.conn.Query(selectLayerInspectionsByImage, imageRef)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query layer inspections by image: %w", err)
+	}
+	defer rows.Close()
+
+	var inspections []LayerInspection
+	for rows.Next() {
+		var li LayerInspection
+		var inspectedAt string
+		var contents, downloadPath sql.NullString
+
+		if err := rows.Scan(
+			&li.ID, &li.ImageRef, &li.LayerDigest, &li.LayerIndex, &li.LayerSize,
+			&li.EntryCount, &contents, &li.Downloaded, &downloadPath, &inspectedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan layer inspection: %w", err)
+		}
+
+		li.Contents = contents.String
+		li.DownloadPath = downloadPath.String
+		li.InspectedAt, _ = parseTimestamp(inspectedAt)
+		inspections = append(inspections, li)
+	}
+	return inspections, nil
+}
+
+// UpdateLayerDownloaded marks a layer as downloaded with its path
+func (db *DB) UpdateLayerDownloaded(imageRef, layerDigest, downloadPath string) error {
+	_, err := db.conn.Exec(updateLayerDownloaded, downloadPath, imageRef, layerDigest)
+	if err != nil {
+		return fmt.Errorf("failed to update layer downloaded: %w", err)
+	}
+	return nil
+}
+
+// CachedImageRow represents a row from the distinct cached images query
+type CachedImageRow struct {
+	ImageRef   string
+	LayerCount int
+}
+
+// QueryDistinctCachedImages returns distinct image refs with layer counts
+func (db *DB) QueryDistinctCachedImages() ([]CachedImageRow, error) {
+	rows, err := db.conn.Query(`
+		SELECT image_ref, COUNT(*) as layer_count 
+		FROM layer_inspections 
+		GROUP BY image_ref 
+		ORDER BY MAX(inspected_at) DESC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query cached images: %w", err)
+	}
+	defer rows.Close()
+
+	var results []CachedImageRow
+	for rows.Next() {
+		var row CachedImageRow
+		if err := rows.Scan(&row.ImageRef, &row.LayerCount); err != nil {
+			return nil, fmt.Errorf("failed to scan row: %w", err)
+		}
+		results = append(results, row)
+	}
+	return results, nil
+}
+
+// LayerSearchResult represents a search hit in cached layer contents
+type LayerSearchResult struct {
+	ImageRef    string
+	LayerDigest string
+	LayerIndex  int
+	LayerSize   int64
+	FilePath    string // The matching file path
+}
+
+// SearchLayerContents searches all cached layer contents for a filename/path pattern
+func (db *DB) SearchLayerContents(pattern string) ([]LayerSearchResult, error) {
+	if pattern == "" {
+		return []LayerSearchResult{}, nil
+	}
+
+	// Search the JSON contents field using LIKE
+	// The contents field contains JSON like: [{"Name":"etc/passwd","Size":1234,"IsDir":false},...]
+	searchPattern := "%" + pattern + "%"
+
+	rows, err := db.conn.Query(`
+		SELECT image_ref, layer_digest, layer_index, layer_size, contents
+		FROM layer_inspections
+		WHERE contents LIKE ?
+		ORDER BY inspected_at DESC
+	`, searchPattern)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search layer contents: %w", err)
+	}
+	defer rows.Close()
+
+	var results []LayerSearchResult
+	for rows.Next() {
+		var imageRef, layerDigest string
+		var layerIndex int
+		var layerSize int64
+		var contents sql.NullString
+
+		if err := rows.Scan(&imageRef, &layerDigest, &layerIndex, &layerSize, &contents); err != nil {
+			return nil, fmt.Errorf("failed to scan row: %w", err)
+		}
+
+		if !contents.Valid {
+			continue
+		}
+
+		// Parse the JSON to find actual matching file paths
+		var entries []struct {
+			Name  string `json:"Name"`
+			Size  int64  `json:"Size"`
+			IsDir bool   `json:"IsDir"`
+		}
+		if err := json.Unmarshal([]byte(contents.String), &entries); err != nil {
+			continue // Skip malformed JSON
+		}
+
+		// Find matching entries (case-insensitive)
+		lowerPattern := strings.ToLower(pattern)
+		for _, entry := range entries {
+			if strings.Contains(strings.ToLower(entry.Name), lowerPattern) {
+				results = append(results, LayerSearchResult{
+					ImageRef:    imageRef,
+					LayerDigest: layerDigest,
+					LayerIndex:  layerIndex,
+					LayerSize:   layerSize,
+					FilePath:    entry.Name,
+				})
+			}
+		}
+	}
+	return results, nil
 }
 
 // SearchLocalKeyword searches user profiles, repos, and gists for a keyword

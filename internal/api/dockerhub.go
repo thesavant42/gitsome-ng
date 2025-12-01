@@ -11,8 +11,9 @@ import (
 )
 
 const (
-	dockerHubSearchURL = "https://hub.docker.com/api/search/v3/catalog/search"
-	dockerHubPageSize  = 25
+	dockerHubSearchURL       = "https://hub.docker.com/api/search/v3/catalog/search"
+	dockerHubPageSize        = 25
+	dockerHubSearchUserAgent = "Docker-Client/24.0.0 (linux)"
 )
 
 // DockerHubClient handles Docker Hub API requests
@@ -76,7 +77,7 @@ func (c *DockerHubClient) Search(query string, page int) (*DockerHubSearchRespon
 	}
 
 	// Set headers to appear as a browser
-	req.Header.Set("User-Agent", dockerHubUserAgent)
+	req.Header.Set("User-Agent", dockerHubSearchUserAgent)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Referer", "https://hub.docker.com/")
 

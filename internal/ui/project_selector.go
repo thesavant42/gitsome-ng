@@ -33,11 +33,13 @@ func NewProjectSelectorModel(projects []string) ProjectSelectorModel {
 	return ProjectSelectorModel{
 		projects: projects,
 		cursor:   0,
+		width:    DefaultWidth,
+		height:   30,
 	}
 }
 
 func (m ProjectSelectorModel) Init() tea.Cmd {
-	return nil
+	return tea.WindowSize()
 }
 
 func (m ProjectSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -142,13 +144,15 @@ func (m ProjectSelectorModel) View() string {
 
 	var b strings.Builder
 
-	// Calculate layout for full-width items
-	// STYLE GUIDE: Use layout.InnerWidth for all content inside borders
-	layout := NewLayout(m.width)
+	// Calculate inner width for content (border width - 3)
+	innerWidth := m.width - 3
+	if innerWidth < 40 {
+		innerWidth = 40
+	}
 
 	b.WriteString(TitleStyle.Render("Select Project"))
 	b.WriteString("\n")
-	b.WriteString(strings.Repeat("─", layout.InnerWidth))
+	b.WriteString(strings.Repeat("─", innerWidth))
 	b.WriteString("\n\n")
 
 	if m.createMode {
@@ -167,7 +171,7 @@ func (m ProjectSelectorModel) View() string {
 				displayName := strings.TrimSuffix(proj, filepath.Ext(proj))
 				line := displayName
 				if i == m.cursor {
-					padding := layout.InnerWidth - len(line)
+					padding := innerWidth - len(line)
 					if padding > 0 {
 						line = line + strings.Repeat(" ", padding)
 					}
@@ -183,7 +187,7 @@ func (m ProjectSelectorModel) View() string {
 		// Create New option
 		createLine := "Create New Project"
 		if m.cursor == len(m.projects) {
-			padding := layout.InnerWidth - len(createLine)
+			padding := innerWidth - len(createLine)
 			if padding > 0 {
 				createLine = createLine + strings.Repeat(" ", padding)
 			}
@@ -196,7 +200,7 @@ func (m ProjectSelectorModel) View() string {
 		// Exit option
 		exitLine := "Exit"
 		if m.cursor == len(m.projects)+1 {
-			padding := layout.InnerWidth - len(exitLine)
+			padding := innerWidth - len(exitLine)
 			if padding > 0 {
 				exitLine = exitLine + strings.Repeat(" ", padding)
 			}
@@ -207,17 +211,17 @@ func (m ProjectSelectorModel) View() string {
 		b.WriteString("\n")
 	}
 
-	// Use centralized border style with dynamic width from terminal and top margin
-	borderStyle := BorderStyle.Width(layout.ViewportWidth).Padding(1, 0).MarginTop(1)
-	
+	// Use centralized border style with dynamic width from terminal
+	borderStyle := BorderStyle.Width(m.width - 2)
+
 	// Build final view with border and help text below
 	var result strings.Builder
 	result.WriteString(borderStyle.Render(b.String()))
-	
+
 	// Add help text outside the border (only in select mode)
 	if !m.createMode {
 		result.WriteString("\n")
-		result.WriteString(" " + HintStyle.Render("Use j/k or arrows to navigate, Enter to select, q to quit"))
+		result.WriteString(" " + HintStyle.Render("up/down: navigate | Enter: select | q: quit"))
 	}
 
 	return result.String()

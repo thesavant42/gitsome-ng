@@ -59,6 +59,8 @@ var menuOptions = []string{
 	"Query Tagged Users",
 	"Search",
 	"Docker Hub Search",
+	"Browse Cached Layers",
+	"Search Cached Layers",
 	"Switch Project",
 	"Export Tab to Markdown",
 	"Export Database Backup",
@@ -111,7 +113,8 @@ type TUIModel struct {
 	helpVisible  bool
 
 	// Layout state
-	layout Layout
+	layout       Layout
+	columnWidths ColumnWidths
 
 	// Menu state
 	menuVisible bool
@@ -145,7 +148,9 @@ type TUIModel struct {
 	switchProject bool // true when user wants to switch to a different project
 
 	// Docker Hub search state
-	launchDockerSearch bool // true when user wants to launch Docker Hub search
+	launchDockerSearch       bool // true when user wants to launch Docker Hub search
+	launchCachedLayers       bool // true when user wants to browse cached layers
+	launchSearchCachedLayers bool // true when user wants to search cached layers
 
 	// Export state
 	dbPath        string // path to current database for backup export
@@ -182,10 +187,10 @@ type TUIModel struct {
 	processedLogins map[string]bool
 
 	// Search state
-	searchActive      bool   // whether search results are being displayed
-	searchQuery       string // current search query type: "docker", "domains"
-	searchPickerVisible bool // whether search query picker is shown
-	searchPickerCursor  int  // cursor in search picker
+	searchActive            bool   // whether search results are being displayed
+	searchQuery             string // current search query type: "docker", "domains"
+	searchPickerVisible     bool   // whether search query picker is shown
+	searchPickerCursor      int    // cursor in search picker
 	localSearchInputVisible bool   // whether local search keyword input is shown
 	localSearchKeyword      string // keyword being typed for local search
 
@@ -432,6 +437,7 @@ func NewTUIModel(
 		cached:           cached,
 		processedLogins:  processedLogins,
 		layout:           DefaultLayout(),
+		columnWidths:     widths,
 		progressBar:      prog,
 		showProgress:     false,
 		progressPercent:  0.0,
@@ -451,7 +457,7 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	// Handle window resize
 	case tea.WindowSizeMsg:
-		m.layout = NewLayout(msg.Width)
+		m.layout = NewLayout(msg.Width, msg.Height)
 		m.progressBar.Width = m.layout.ContentWidth - 4
 		m.rebuildTable()
 		return m, nil
@@ -1136,11 +1142,19 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.menuVisible = false
 			m.launchDockerSearch = true
 			return m, tea.Quit
-		case 5: // Switch Project
+		case 5: // Browse Cached Layers
+			m.menuVisible = false
+			m.launchCachedLayers = true
+			return m, tea.Quit
+		case 6: // Search Cached Layers
+			m.menuVisible = false
+			m.launchSearchCachedLayers = true
+			return m, tea.Quit
+		case 7: // Switch Project
 			m.menuVisible = false
 			m.switchProject = true
 			return m, tea.Quit
-		case 6: // Export Tab to Markdown
+		case 8: // Export Tab to Markdown
 			m.menuVisible = false
 			filename, err := ExportTabToMarkdown(m.stats, m.repoOwner, m.repoName, m.totalCommits, m.showCombined)
 			if err != nil {
@@ -1148,7 +1162,7 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.exportMessage = fmt.Sprintf("Exported to %s", filename)
 			}
-		case 7: // Export Database Backup
+		case 9: // Export Database Backup
 			m.menuVisible = false
 			if m.dbPath != "" {
 				filename, err := ExportDatabaseBackup(m.dbPath)
@@ -1160,7 +1174,7 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.exportMessage = "Database path not available"
 			}
-		case 8: // Export Project Report
+		case 10: // Export Project Report
 			m.menuVisible = false
 			if m.database != nil {
 				filename, err := ExportProjectReport(m.database, m.dbPath)
@@ -1592,7 +1606,7 @@ func (m *TUIModel) switchToLocalSearch(keyword string) {
 		if len(matchSource) > 35 {
 			matchSource = matchSource[:32] + "..."
 		}
-		
+
 		// Shorten type labels for display (standardized to 3 chars)
 		typeLabel := r.MatchType
 		switch r.MatchType {
@@ -1609,10 +1623,10 @@ func (m *TUIModel) switchToLocalSearch(keyword string) {
 		case "gist_file":
 			typeLabel = "gst"
 		}
-		
+
 		// Format: "type: source" to show what matched
 		matchInfo := fmt.Sprintf("%s: %s", typeLabel, matchSource)
-		
+
 		s := models.ContributorStats{
 			Name:        matchInfo,
 			Email:       r.Email,
@@ -1705,7 +1719,7 @@ func (m *TUIModel) rebuildTable() {
 		table.WithColumns(columns),
 		table.WithRows(rows),
 		table.WithFocused(true),
-		table.WithHeight(TableHeight),
+		table.WithHeight(m.layout.TableHeight),
 	)
 
 	s := table.DefaultStyles()
@@ -2505,10 +2519,10 @@ func (m TUIModel) View() string {
 	tableView := m.renderTableWithLinks()
 	contentBuilder.WriteString(tableView)
 
-	// Add border around content (tabs + table) using centralized style with dynamic width
+	// Add border around content (tabs + table)
+	// Border.Width sets content width, so use InnerWidth to make total = ViewportWidth
 	borderedContent := BorderStyle.
-		Width(m.layout.ViewportWidth).
-		Padding(1, 0).
+		Width(m.layout.InnerWidth).
 		Render(contentBuilder.String())
 	b.WriteString(borderedContent)
 	b.WriteString("\n")
@@ -2533,7 +2547,7 @@ func (m TUIModel) View() string {
 		// Two-column layout for keyboard controls
 		leftCol := []string{
 			"Keyboard Controls:",
-			"  j/k or up/down Navigate rows",
+			"  up/down        Navigate rows",
 			"  left/right     Switch between repositories",
 			"  L              Select/deselect row for linking (yellow = pending)",
 			"  Esc            Commit selected rows as a link group",
@@ -2626,7 +2640,6 @@ func (m TUIModel) View() string {
 }
 
 // renderPageIndicator renders the page indicator for multi-repo navigation
-// The arrows are clamped to viewport edges, tabs scroll if they overflow
 func (m TUIModel) renderPageIndicator() string {
 	if len(m.repos) == 0 {
 		return ""
@@ -2642,124 +2655,95 @@ func (m TUIModel) renderPageIndicator() string {
 		Foreground(ColorText).
 		Padding(0, 1)
 
-	// Build all tab labels with their rendered widths
-	type tabInfo struct {
-		label    string
-		rendered string
-		width    int
-		active   bool
-	}
+	// Fixed width: InnerWidth = ViewportWidth - 2 (content inside border)
+	// Layout: < (1) + space (1) + [tabs] + [padding] + > (1) = InnerWidth
+	// So tabs + padding = InnerWidth - 3
+	availableForTabs := m.layout.InnerWidth - 3
 
-	var tabs []tabInfo
+	// Build all tab labels
+	var labels []string
+	activeIdx := 0
+
 	for i, repo := range m.repos {
-		label := fmt.Sprintf("%s/%s", repo.Owner, repo.Name)
-		active := (i == m.currentRepoIndex && !m.showCombined)
-		var rendered string
-		if active {
-			rendered = activeStyle.Render(label)
-		} else {
-			rendered = inactiveStyle.Render(label)
+		labels = append(labels, fmt.Sprintf("%s/%s", repo.Owner, repo.Name))
+		if i == m.currentRepoIndex && !m.showCombined && !m.searchActive {
+			activeIdx = len(labels) - 1
 		}
-		tabs = append(tabs, tabInfo{label, rendered, lipgloss.Width(rendered) + 1, active}) // +1 for space
 	}
 
-	// Add Combined tab
-	combinedLabel := "Combined"
-	var combinedRendered string
+	labels = append(labels, "Combined")
 	if m.showCombined && !m.searchActive {
-		combinedRendered = activeStyle.Render(combinedLabel)
-	} else {
-		combinedRendered = inactiveStyle.Render(combinedLabel)
+		activeIdx = len(labels) - 1
 	}
-	tabs = append(tabs, tabInfo{combinedLabel, combinedRendered, lipgloss.Width(combinedRendered), m.showCombined && !m.searchActive})
 
-	// Add Search tab if search is active
 	if m.searchActive {
-		searchLabel := "Search: " + m.searchQuery
-		searchRendered := activeStyle.Render(searchLabel)
-		tabs = append(tabs, tabInfo{searchLabel, searchRendered, lipgloss.Width(searchRendered), true})
+		labels = append(labels, "Search: "+m.searchQuery)
+		activeIdx = len(labels) - 1
 	}
 
-	// Calculate available width for tabs (viewport - left padding - arrows - right padding)
-	// Layout: "  < [tabs] >"  =>  2 + 2 + tabs + 2 = viewport
-	availableWidth := m.layout.ViewportWidth - 6
-
-	// Find which tabs to display, keeping active tab visible
-	activeIdx := len(tabs) - 1 // Last tab (Combined or Search if active)
-	if m.searchActive {
-		activeIdx = len(tabs) - 1 // Search tab is last
-	} else if m.showCombined {
-		activeIdx = len(tabs) - 1 // Combined tab
-	} else {
-		activeIdx = m.currentRepoIndex
-	}
-
-	// Calculate total width of all tabs
-	totalWidth := 0
-	for _, t := range tabs {
-		totalWidth += t.width
-	}
-
-	// Calculate visible range - default to showing all tabs
-	var startIdx, endIdx int
-
-	// If tabs don't fit, scroll to keep active tab visible
-	if totalWidth > availableWidth {
-		// Need to scroll - keep active tab visible, start from active and expand in both directions
-		startIdx = activeIdx
-		endIdx = activeIdx + 1
-		currentWidth := tabs[activeIdx].width
-
-		// Expand left and right alternately
-		for {
-			expanded := false
-			// Try expanding left
-			if startIdx > 0 && currentWidth+tabs[startIdx-1].width <= availableWidth {
-				startIdx--
-				currentWidth += tabs[startIdx].width
-				expanded = true
-			}
-			// Try expanding right
-			if endIdx < len(tabs) && currentWidth+tabs[endIdx].width <= availableWidth {
-				currentWidth += tabs[endIdx].width
-				endIdx++
-				expanded = true
-			}
-			if !expanded {
-				break
-			}
-		}
-	} else {
-		// All tabs fit, show them all
-		startIdx = 0
-		endIdx = len(tabs)
-	}
-
-	// Build the tab bar
-	var tabsStr strings.Builder
-	for i := startIdx; i < endIdx; i++ {
-		tabsStr.WriteString(tabs[i].rendered)
-		if i < endIdx-1 {
-			tabsStr.WriteString(" ")
+	// Render active tab first to ensure it fits (truncate if needed)
+	activeLabel := labels[activeIdx]
+	if lipgloss.Width(activeStyle.Render(activeLabel)) > availableForTabs {
+		// Truncate to fit: reserve 4 for style padding, 3 for "..."
+		maxLen := availableForTabs - 4
+		if maxLen > 3 && len(activeLabel) > maxLen {
+			activeLabel = activeLabel[:maxLen-3] + "..."
 		}
 	}
 
-	// Calculate padding to push right arrow to edge
-	tabsRendered := tabsStr.String()
-	tabsWidth := lipgloss.Width(tabsRendered)
-	rightPadding := availableWidth - tabsWidth
-	if rightPadding < 0 {
-		rightPadding = 0
+	// Render tabs starting from active, expand both directions
+	var parts []string
+	usedWidth := 0
+
+	// Add active tab
+	activeRendered := activeStyle.Render(activeLabel)
+	parts = append(parts, activeRendered)
+	usedWidth = lipgloss.Width(activeRendered)
+
+	// Try adding tabs to the left and right
+	left, right := activeIdx-1, activeIdx+1
+	for left >= 0 || right < len(labels) {
+		// Try left
+		if left >= 0 {
+			rendered := inactiveStyle.Render(labels[left])
+			w := lipgloss.Width(rendered) + 1 // +1 for space
+			if usedWidth+w <= availableForTabs {
+				parts = append([]string{rendered}, parts...)
+				usedWidth += w
+				left--
+			} else {
+				left = -1 // stop trying left
+			}
+		}
+		// Try right
+		if right < len(labels) {
+			rendered := inactiveStyle.Render(labels[right])
+			w := lipgloss.Width(rendered) + 1 // +1 for space
+			if usedWidth+w <= availableForTabs {
+				parts = append(parts, rendered)
+				usedWidth += w
+				right++
+			} else {
+				right = len(labels) // stop trying right
+			}
+		}
 	}
 
-	// Build final string with arrows clamped to edges
+	// Join tabs with spaces
+	tabsStr := strings.Join(parts, " ")
+	tabsWidth := lipgloss.Width(tabsStr)
+
+	// Calculate padding
+	padding := availableForTabs - tabsWidth
+	if padding < 0 {
+		padding = 0
+	}
+
+	// Build final string: exactly InnerWidth chars
 	var b strings.Builder
-	b.WriteString("  ") // Left padding to align with border
 
-	// Left arrow - show if we can scroll left
-	if startIdx > 0 {
-		b.WriteString(ArrowStyle.Render("<"))
-	} else if m.currentRepoIndex > 0 || m.showCombined {
+	// Left arrow
+	if activeIdx > 0 {
 		b.WriteString(ArrowStyle.Render("<"))
 	} else {
 		b.WriteString(" ")
@@ -2767,13 +2751,13 @@ func (m TUIModel) renderPageIndicator() string {
 	b.WriteString(" ")
 
 	// Tabs
-	b.WriteString(tabsRendered)
+	b.WriteString(tabsStr)
 
-	// Right padding
-	b.WriteString(strings.Repeat(" ", rightPadding))
+	// Padding
+	b.WriteString(strings.Repeat(" ", padding))
 
-	// Right arrow - show if we can scroll right or navigate right
-	if endIdx < len(tabs) || !m.showCombined {
+	// Right arrow
+	if activeIdx < len(labels)-1 {
 		b.WriteString(ArrowStyle.Render(">"))
 	} else {
 		b.WriteString(" ")
@@ -2789,20 +2773,22 @@ func (m TUIModel) renderAddRepo() string {
 	b.WriteString(TitleStyle.Render("Add Repository"))
 	b.WriteString("\n\n")
 
-	b.WriteString(HintStyle.Render("Enter repository in owner/repo format:"))
+	b.WriteString(NormalStyle.Render("Enter repository in owner/repo format:"))
 	b.WriteString("\n\n")
 
 	b.WriteString(AccentStyle.Render("> "))
 	b.WriteString(m.addRepoInput)
 	b.WriteString("_")
-	b.WriteString("\n\n")
-
-	b.WriteString(HintStyle.Render("Enter: add repository | Esc: cancel"))
 
 	// Add border with width from layout
-	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).Padding(1, 0).MarginTop(1)
+	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).MarginTop(1)
 
-	return borderStyle.Render(b.String())
+	var result strings.Builder
+	result.WriteString(borderStyle.Render(b.String()))
+	result.WriteString("\n")
+	result.WriteString(" " + HintStyle.Render("Enter: add repository | Esc: cancel"))
+
+	return result.String()
 }
 
 // renderFormOverlay renders a huh form in a bordered overlay
@@ -2813,8 +2799,8 @@ func (m TUIModel) renderFormOverlay(formView string, title string) string {
 	b.WriteString("\n\n")
 	b.WriteString(formView)
 
-	// Add border with width from layout
-	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).Padding(1, 0).MarginTop(1)
+	// Add border with width from layout (InnerWidth so total = ViewportWidth)
+	borderStyle := BorderStyle.Width(m.layout.InnerWidth)
 
 	return borderStyle.Render(b.String())
 }
@@ -2830,14 +2816,17 @@ func (m TUIModel) renderFetchPrompt() string {
 	b.WriteString(AccentStyle.Render(fmt.Sprintf("%s/%s", m.fetchPromptRepo.Owner, m.fetchPromptRepo.Name)))
 	b.WriteString(" has no cached commits.\n\n")
 
-	b.WriteString("Fetch commits from GitHub API?\n\n")
+	b.WriteString("Fetch commits from GitHub API?")
 
-	b.WriteString(HintStyle.Render("Y: Fetch commits | N/Esc: Skip"))
+	// Add border with width from layout (InnerWidth so total = ViewportWidth)
+	borderStyle := BorderStyle.Width(m.layout.InnerWidth).MarginTop(1)
 
-	// Add border with width from layout
-	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).Padding(1, 0).MarginTop(1)
+	var result strings.Builder
+	result.WriteString(borderStyle.Render(b.String()))
+	result.WriteString("\n")
+	result.WriteString(" " + HintStyle.Render("Y: Fetch commits | N/Esc: Skip"))
 
-	return borderStyle.Render(b.String())
+	return result.String()
 }
 
 // renderQueryProgress renders the user query progress screen
@@ -2863,9 +2852,9 @@ func (m TUIModel) renderQueryProgress() string {
 	}
 	b.WriteString("\n")
 
-	// Add border with width from layout
+	// Add border with width from layout (InnerWidth so total = ViewportWidth)
 	borderStyle := BorderStyle.
-		Width(m.layout.ViewportWidth).
+		Width(m.layout.InnerWidth).
 		Padding(1, 0).
 		MarginTop(1)
 
@@ -3072,9 +3061,9 @@ func (m TUIModel) renderUserDetail() string {
 		}
 	}
 
-	// Add border with width from layout
+	// Add border with width from layout (InnerWidth so total = ViewportWidth)
 	borderStyle := BorderStyle.
-		Width(m.layout.ViewportWidth).
+		Width(m.layout.InnerWidth).
 		Padding(1, 0).
 		MarginTop(1)
 
@@ -3082,7 +3071,7 @@ func (m TUIModel) renderUserDetail() string {
 	var result strings.Builder
 	result.WriteString(borderStyle.Render(b.String()))
 	result.WriteString("\n")
-	result.WriteString(" " + HintStyle.Render("left/right: switch tabs | j/k: navigate | Enter: open in browser | p: profile | Esc: back"))
+	result.WriteString(" " + HintStyle.Render("left/right: switch tabs | up/down: navigate | Enter: open in browser | p: profile | Esc: back"))
 
 	return result.String()
 }
@@ -3108,8 +3097,8 @@ func (m TUIModel) renderFetchProgress() string {
 		b.WriteString("\n")
 	}
 
-	// Add border with width from layout
-	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).Padding(1, 0).MarginTop(1)
+	// Add border with width from layout (InnerWidth so total = ViewportWidth)
+	borderStyle := BorderStyle.Width(m.layout.InnerWidth)
 
 	return borderStyle.Render(b.String())
 }
@@ -3118,8 +3107,8 @@ func (m TUIModel) renderFetchProgress() string {
 func (m TUIModel) renderMenu() string {
 	var b strings.Builder
 
-	menuSelectedStyle := SelectedStyle.Padding(0, 1)
-	menuNormalStyle := NormalStyle.Padding(0, 1)
+	menuSelectedStyle := SelectedStyle.Width(m.layout.InnerWidth)
+	menuNormalStyle := NormalStyle.Width(m.layout.InnerWidth)
 
 	b.WriteString(TitleStyle.Render("Menu"))
 	b.WriteString("\n\n")
@@ -3133,13 +3122,15 @@ func (m TUIModel) renderMenu() string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString("\n")
-	b.WriteString(HintStyle.Render("Enter: select | Esc: close"))
+	// Add border around menu with width from layout (InnerWidth so total = ViewportWidth)
+	borderStyle := BorderStyle.Width(m.layout.InnerWidth).MarginTop(1)
 
-	// Add border around menu with width from layout
-	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).Padding(1, 1).MarginTop(1)
+	var result strings.Builder
+	result.WriteString(borderStyle.Render(b.String()))
+	result.WriteString("\n")
+	result.WriteString(" " + HintStyle.Render("Enter: select | Esc: close"))
 
-	return borderStyle.Render(b.String())
+	return result.String()
 }
 
 // renderDomainConfig renders the domain configuration screen
@@ -3150,7 +3141,7 @@ func (m TUIModel) renderDomainConfig() string {
 	b.WriteString("\n\n")
 
 	if len(m.domainList) == 0 {
-		b.WriteString(HintStyle.Render("No domains configured. Press A to add one."))
+		b.WriteString(NormalStyle.Render("No domains configured. Press A to add one."))
 		b.WriteString("\n")
 	} else {
 		for i, domain := range m.domainList {
@@ -3175,16 +3166,21 @@ func (m TUIModel) renderDomainConfig() string {
 		b.WriteString(AccentStyle.Render("Add domain: "))
 		b.WriteString(m.domainInput)
 		b.WriteString("_")
-		b.WriteString("\n\n")
-		b.WriteString(HintStyle.Render("Enter: save | Esc: cancel"))
-	} else {
-		b.WriteString(HintStyle.Render("A: add domain | D: delete selected | Esc: back"))
 	}
 
-	// Add border around config screen with width from layout
-	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).Padding(1, 1).MarginTop(1)
+	// Add border around config screen with width from layout (InnerWidth so total = ViewportWidth)
+	borderStyle := BorderStyle.Width(m.layout.InnerWidth).MarginTop(1)
 
-	return borderStyle.Render(b.String())
+	var result strings.Builder
+	result.WriteString(borderStyle.Render(b.String()))
+	result.WriteString("\n")
+	if m.domainInputActive {
+		result.WriteString(" " + HintStyle.Render("Enter: save | Esc: cancel"))
+	} else {
+		result.WriteString(" " + HintStyle.Render("A: add domain | D: delete selected | Esc: back"))
+	}
+
+	return result.String()
 }
 
 // renderSearchPicker renders the search query picker overlay
@@ -3206,17 +3202,19 @@ func (m TUIModel) renderSearchPicker() string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString("\n")
+	// Add border around picker with width from layout (InnerWidth so total = ViewportWidth)
+	borderStyle := BorderStyle.Width(m.layout.InnerWidth).MarginTop(1)
+
+	var result strings.Builder
+	result.WriteString(borderStyle.Render(b.String()))
+	result.WriteString("\n")
 	if m.searchActive {
-		b.WriteString(HintStyle.Render("Enter: select | C: clear search | Esc: close"))
+		result.WriteString(" " + HintStyle.Render("Enter: select | C: clear search | Esc: close"))
 	} else {
-		b.WriteString(HintStyle.Render("Enter: select | Esc: close"))
+		result.WriteString(" " + HintStyle.Render("Enter: select | Esc: close"))
 	}
 
-	// Add border around picker with width from layout
-	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).Padding(1, 1).MarginTop(1)
-
-	return borderStyle.Render(b.String())
+	return result.String()
 }
 
 // renderLocalSearchInput renders the local keyword search input overlay
@@ -3233,14 +3231,16 @@ func (m TUIModel) renderLocalSearchInput() string {
 	b.WriteString(AccentStyle.Render("> "))
 	b.WriteString(NormalStyle.Render(m.localSearchKeyword))
 	b.WriteString(AccentStyle.Render("_"))
-	b.WriteString("\n\n")
 
-	b.WriteString(HintStyle.Render("Enter: search | Esc: cancel"))
+	// Add border around input with width from layout (InnerWidth so total = ViewportWidth)
+	borderStyle := BorderStyle.Width(m.layout.InnerWidth).MarginTop(1)
 
-	// Add border around input with width from layout
-	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).Padding(1, 1).MarginTop(1)
+	var result strings.Builder
+	result.WriteString(borderStyle.Render(b.String()))
+	result.WriteString("\n")
+	result.WriteString(" " + HintStyle.Render("Enter: search | Esc: cancel"))
 
-	return borderStyle.Render(b.String())
+	return result.String()
 }
 
 // extractDomain extracts the domain part from an email address
@@ -3292,24 +3292,24 @@ func (m TUIModel) renderTableWithLinks() string {
 	dataRowIndex := 0
 
 	for i, line := range lines {
-		// Skip the table's built-in divider line (line 1) - don't render it
-		// This prevents duplicate dividers since the border provides visual separation
-		if i == 1 {
-			continue
-		}
-
 		// Keep header row (line 0) as-is
 		if i == 0 {
 			result = append(result, line)
 			continue
 		}
 
+		// Divider line - ViewportWidth minus 2 for border chars
+		if i == 1 {
+			result = append(result, strings.Repeat("─", m.layout.ViewportWidth-2))
+			continue
+		}
+
 		// For data rows (i >= 2), calculate the actual data index
 		dataRowIndex = i - 2
 
-		// Full-width selection highlighting
+		// Selector bar - ViewportWidth minus 2 for border chars
 		if dataRowIndex == cursor {
-			result = append(result, SelectedStyle.Width(m.layout.InnerWidth).Render(line))
+			result = append(result, SelectedStyle.Width(m.layout.ViewportWidth-2).Render(line))
 			continue
 		}
 
@@ -3448,8 +3448,10 @@ func RunMultiRepoTUI(
 	// Check what action user wants
 	if m, ok := finalModel.(TUIModel); ok {
 		return TUIResult{
-			SwitchProject:      m.switchProject,
-			LaunchDockerSearch: m.launchDockerSearch,
+			SwitchProject:            m.switchProject,
+			LaunchDockerSearch:       m.launchDockerSearch,
+			LaunchCachedLayers:       m.launchCachedLayers,
+			LaunchSearchCachedLayers: m.launchSearchCachedLayers,
 		}, nil
 	}
 	return TUIResult{}, nil
@@ -3457,8 +3459,10 @@ func RunMultiRepoTUI(
 
 // TUIResult represents the result of running the TUI
 type TUIResult struct {
-	SwitchProject      bool
-	LaunchDockerSearch bool
+	SwitchProject            bool
+	LaunchDockerSearch       bool
+	LaunchCachedLayers       bool
+	LaunchSearchCachedLayers bool
 }
 
 // formatProviderName converts provider names to display format

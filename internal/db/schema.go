@@ -493,3 +493,62 @@ WHERE login = ?
 ORDER BY timestamp DESC
 LIMIT ?
 `
+
+// Schema for layer inspections (Docker image layer peek history)
+const createLayerInspectionsTable = `
+CREATE TABLE IF NOT EXISTS layer_inspections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    image_ref TEXT NOT NULL,
+    layer_digest TEXT NOT NULL,
+    layer_index INTEGER NOT NULL,
+    layer_size INTEGER,
+    entry_count INTEGER,
+    contents TEXT,
+    downloaded BOOLEAN DEFAULT FALSE,
+    download_path TEXT,
+    inspected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(image_ref, layer_digest)
+);
+
+CREATE INDEX IF NOT EXISTS idx_layer_inspections_image ON layer_inspections(image_ref);
+CREATE INDEX IF NOT EXISTS idx_layer_inspections_digest ON layer_inspections(layer_digest);
+`
+
+// SQL queries for layer inspections
+const insertLayerInspection = `
+INSERT OR REPLACE INTO layer_inspections (
+    image_ref, layer_digest, layer_index, layer_size, entry_count, contents, downloaded, download_path, inspected_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+`
+
+const selectLayerInspection = `
+SELECT id, image_ref, layer_digest, layer_index, layer_size, entry_count, contents, downloaded, download_path, inspected_at
+FROM layer_inspections
+WHERE image_ref = ? AND layer_digest = ?
+`
+
+const selectLayerInspectionByDigest = `
+SELECT id, image_ref, layer_digest, layer_index, layer_size, entry_count, contents, downloaded, download_path, inspected_at
+FROM layer_inspections
+WHERE layer_digest = ?
+ORDER BY inspected_at DESC
+LIMIT 1
+`
+
+const selectLayerInspections = `
+SELECT id, image_ref, layer_digest, layer_index, layer_size, entry_count, contents, downloaded, download_path, inspected_at
+FROM layer_inspections
+ORDER BY inspected_at DESC
+LIMIT ?
+`
+
+const selectLayerInspectionsByImage = `
+SELECT id, image_ref, layer_digest, layer_index, layer_size, entry_count, contents, downloaded, download_path, inspected_at
+FROM layer_inspections
+WHERE image_ref = ?
+ORDER BY layer_index ASC
+`
+
+const updateLayerDownloaded = `
+UPDATE layer_inspections SET downloaded = TRUE, download_path = ? WHERE image_ref = ? AND layer_digest = ?
+`

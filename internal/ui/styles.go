@@ -8,8 +8,7 @@ import (
 
 // Layout constants - single source of truth for all viewport dimensions
 const (
-	MinViewportWidth = 110
-	MaxViewportWidth = 140
+	MinViewportWidth = 80  // Minimum usable width
 	DefaultWidth     = 110 // Used when terminal size is unknown
 	TableHeight      = 20
 	BorderPadding    = 2 // left/right padding inside borders
@@ -17,37 +16,39 @@ const (
 
 // Layout holds computed dimensions for the current terminal size
 type Layout struct {
-	ViewportWidth int // clamped terminal width
-	ContentWidth  int // ViewportWidth - border chars
-	TableWidth    int // sum of column widths + separators
-	InnerWidth    int // ViewportWidth - 2 (EXACT width for content inside borders - THE ONE RULE)
+	ViewportWidth  int // clamped terminal width
+	ViewportHeight int // terminal height
+	ContentWidth   int // ViewportWidth - border chars
+	TableWidth     int // sum of column widths + separators
+	TableHeight    int // available height for table rows
+	InnerWidth     int // ViewportWidth - 2 (EXACT width for content inside borders - THE ONE RULE)
 }
 
-// NewLayout creates a Layout from the terminal width, clamping to min/max
-func NewLayout(terminalWidth int) Layout {
-	width := clamp(terminalWidth, MinViewportWidth, MaxViewportWidth)
+// NewLayout creates a Layout from the terminal dimensions
+func NewLayout(terminalWidth, terminalHeight int) Layout {
+	width := terminalWidth
+	if width < MinViewportWidth {
+		width = MinViewportWidth
+	}
+	// Calculate table height: terminal height minus overhead
+	// Overhead: 1 top margin + 2 border (top/bottom) + 2 padding + 3 tabs + 2 header + 1 footer = ~11 lines
+	tableHeight := terminalHeight - 11
+	if tableHeight < 5 {
+		tableHeight = 5
+	}
 	return Layout{
-		ViewportWidth: width,
-		ContentWidth:  width - 2, // minus border chars
-		TableWidth:    width - 4, // minus border + padding
-		InnerWidth:    width - 0, // EXACT width for content inside borders (THE ONE RULE)
+		ViewportWidth:  width, // full terminal width for border
+		ViewportHeight: terminalHeight,
+		ContentWidth:   width - 2,   // content inside border
+		TableWidth:     width - 6,   // minus border + padding
+		TableHeight:    tableHeight, // dynamic table height
+		InnerWidth:     width - 2,   // ViewportWidth - 2 (content inside borders)
 	}
 }
 
-// DefaultLayout returns a layout using the default width
+// DefaultLayout returns a layout using the default dimensions
 func DefaultLayout() Layout {
-	return NewLayout(DefaultWidth)
-}
-
-// clamp restricts a value to the given range
-func clamp(value, min, max int) int {
-	if value < min {
-		return min
-	}
-	if value > max {
-		return max
-	}
-	return value
+	return NewLayout(DefaultWidth, 30)
 }
 
 // Minimum column widths (used as fallback and for header sizing)
@@ -72,6 +73,11 @@ type ColumnWidths struct {
 	Email   int
 	Commits int
 	Percent int
+}
+
+// Total returns the sum of all column widths
+func (w ColumnWidths) Total() int {
+	return w.Tag + w.Rank + w.Name + w.Login + w.Email + w.Commits + w.Percent
 }
 
 // DefaultColumnWidths returns minimum column widths
@@ -149,10 +155,9 @@ var (
 	NormalStyle = lipgloss.NewStyle().
 			Foreground(ColorText)
 
-	// Hint/help text style
+	// Hint/help text style - yellow for visibility
 	HintStyle = lipgloss.NewStyle().
-			Foreground(ColorText).
-			Italic(true)
+			Foreground(ColorAccent)
 
 	// Accent style for highlighted text (yellow)
 	AccentStyle = lipgloss.NewStyle().

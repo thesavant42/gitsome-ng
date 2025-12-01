@@ -417,3 +417,15 @@
 2025-11-30T07:59:03-08:00 INFO API: POST GraphQL endpoint=https://api.github.com/graphql login=Hexxeh
 2025-11-30T07:59:06-08:00 INFO API: Checking Docker Hub profile login=Hexxeh
 2025-11-30T07:59:06-08:00 ERRO API: Docker Hub check failed login=Hexxeh error="unexpected status code: 302"
+2025-11-30T15:25:39-08:00 INFO API: POST GraphQL endpoint=https://api.github.com/graphql login=popcornmix
+2025-11-30T15:25:41-08:00 INFO API: Checking Docker Hub profile login=popcornmix
+2025-11-30T15:25:42-08:00 INFO API: No Docker Hub profile found login=popcornmix
+2025-11-30T15:25:42-08:00 INFO API: POST GraphQL endpoint=https://api.github.com/graphql login=njhollinghurst
+2025-11-30T15:25:43-08:00 INFO API: Checking Docker Hub profile login=njhollinghurst
+2025-11-30T15:25:43-08:00 INFO API: No Docker Hub profile found login=njhollinghurst
+2025-11-30T15:25:43-08:00 INFO API: POST GraphQL endpoint=https://api.github.com/graphql login=pelwell
+2025-11-30T15:25:46-08:00 INFO API: Checking Docker Hub profile login=pelwell
+2025-11-30T15:25:46-08:00 INFO API: No Docker Hub profile found login=pelwell
+2025-11-30T15:25:46-08:00 INFO API: POST GraphQL endpoint=https://api.github.com/graphql login=timg236
+2025-11-30T15:25:48-08:00 INFO API: Checking Docker Hub profile login=timg236
+2025-11-30T15:25:48-08:00 INFO API: No Docker Hub profile found login=timg236

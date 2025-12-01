@@ -10,23 +10,28 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/log"
 	"github.com/thesavant42/gitsome-ng/internal/api"
+	"github.com/thesavant42/gitsome-ng/internal/db"
 )
 
 // DockerHubSearchModel is the TUI model for Docker Hub search
 type DockerHubSearchModel struct {
-	client     *api.DockerHubClient
-	logger     *log.Logger
-	layout     Layout
-	table      table.Model
-	textInput  textinput.Model
-	results    *api.DockerHubSearchResponse
-	query      string
-	page       int
-	searching  bool
-	inputMode  bool
-	err        error
-	quitting   bool
-	returnToMain bool
+	client          *api.DockerHubClient
+	logger          *log.Logger
+	database        *db.DB
+	layout          Layout
+	table           table.Model
+	textInput       textinput.Model
+	results         *api.DockerHubSearchResponse
+	query           string
+	page            int
+	searching       bool
+	inputMode       bool
+	err             error
+	quitting        bool
+	returnToMain    bool
+	launchInspector bool           // true when user wants to inspect an image
+	selectedImage   string         // image name to inspect
+	cachedImages    map[string]int // image name -> layer count (from DB)
 }
 
 // DockerHubSearchMsg is sent when search results are ready
@@ -36,7 +41,7 @@ type DockerHubSearchMsg struct {
 }
 
 // NewDockerHubSearchModel creates a new Docker Hub search TUI
-func NewDockerHubSearchModel(logger *log.Logger) DockerHubSearchModel {
+func NewDockerHubSearchModel(logger *log.Logger, database *db.DB) DockerHubSearchModel {
 	// Create text input for search
 	ti := textinput.New()
 	ti.Placeholder = "Enter search term..."
@@ -49,12 +54,12 @@ func NewDockerHubSearchModel(logger *log.Logger) DockerHubSearchModel {
 
 	// Create table with initial columns
 	columns := []table.Column{
-		{Title: "Name", Width: 35},
-		{Title: "Publisher", Width: 15},
-		{Title: "Stars", Width: 8},
-		{Title: "Pulls", Width: 10},
-		{Title: "Badge", Width: 12},
-		{Title: "Description", Width: 40},
+		{Title: "Name"},
+		{Title: "Publisher"},
+		{Title: "Stars"},
+		{Title: "Pulls"},
+		{Title: "Badge"},
+		{Title: "Description"},
 	}
 
 	t := table.New(
@@ -78,13 +83,15 @@ func NewDockerHubSearchModel(logger *log.Logger) DockerHubSearchModel {
 	t.SetStyles(s)
 
 	return DockerHubSearchModel{
-		client:    api.NewDockerHubClient(logger),
-		logger:    logger,
-		layout:    layout,
-		table:     t,
-		textInput: ti,
-		page:      1,
-		inputMode: true,
+		client:       api.NewDockerHubClient(logger),
+		logger:       logger,
+		database:     database,
+		layout:       layout,
+		table:        t,
+		textInput:    ti,
+		page:         1,
+		inputMode:    true,
+		cachedImages: make(map[string]int),
 	}
 }
 
@@ -97,8 +104,11 @@ func (m DockerHubSearchModel) Init() tea.Cmd {
 func (m DockerHubSearchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.layout = NewLayout(msg.Width)
+		m.layout = NewLayout(msg.Width, msg.Height)
 		m.table.SetHeight(TableHeight)
+		if m.results != nil {
+			m.updateTable()
+		}
 		return m, nil
 
 	case DockerHubSearchMsg:
@@ -172,11 +182,17 @@ func (m DockerHubSearchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "enter":
-			// Could open Docker Hub URL in browser
+			// Launch layer inspector for selected image
+			fmt.Println("DEBUG: Enter pressed in table mode")
 			if m.results != nil && len(m.results.Results) > 0 {
 				cursor := m.table.Cursor()
+				fmt.Printf("DEBUG: cursor=%d, results=%d\n", cursor, len(m.results.Results))
 				if cursor >= 0 && cursor < len(m.results.Results) {
-					// For now, just show selected - could open browser later
+					selected := m.results.Results[cursor]
+					m.selectedImage = selected.Name
+					m.launchInspector = true
+					fmt.Printf("DEBUG: selectedImage=%s, launchInspector=%v\n", m.selectedImage, m.launchInspector)
+					return m, tea.Quit
 				}
 			}
 		}
@@ -205,8 +221,6 @@ func (m DockerHubSearchModel) View() string {
 	if m.inputMode {
 		contentBuilder.WriteString(" Search: ")
 		contentBuilder.WriteString(m.textInput.View())
-		contentBuilder.WriteString("\n\n")
-		contentBuilder.WriteString(HintStyle.Render(" Enter: search | Esc: back to main"))
 	} else {
 		// Show current query and pagination
 		queryInfo := fmt.Sprintf(" Query: %s", m.query)
@@ -225,17 +239,21 @@ func (m DockerHubSearchModel) View() string {
 			tableView := m.renderTableWithSelection()
 			contentBuilder.WriteString(tableView)
 		}
-
-		contentBuilder.WriteString("\n\n")
-		contentBuilder.WriteString(HintStyle.Render(" /: new search | n/->: next page | p/<-: prev page | j/k: navigate | Esc: back"))
 	}
 
-	// Wrap in bordered box
+	// Wrap in bordered box with padding like main TUI
 	borderedContent := BorderStyle.
-		Width(m.layout.ViewportWidth).
 		Padding(1, 0).
 		Render(contentBuilder.String())
 	b.WriteString(borderedContent)
+	b.WriteString("\n")
+
+	// Help text OUTSIDE border (like main TUI footer)
+	if m.inputMode {
+		b.WriteString(" " + HintStyle.Render("Enter: search | Esc: back to main"))
+	} else {
+		b.WriteString(" " + HintStyle.Render("Enter: inspect layers | /: new search | n/->: next | p/<-: prev | up/down: navigate | Esc: back"))
+	}
 
 	return b.String()
 }
@@ -254,25 +272,48 @@ func (m *DockerHubSearchModel) updateTable() {
 		return
 	}
 
+	// Check which images we have cached layer data for
+	m.cachedImages = make(map[string]int)
+	if m.database != nil {
+		for _, r := range m.results.Results {
+			// Check all possible tag variants (we store with tag in image_ref)
+			inspections, err := m.database.GetLayerInspectionsByImage(r.Name + ":latest")
+			if err == nil && len(inspections) > 0 {
+				m.cachedImages[r.Name] = len(inspections)
+			} else {
+				// Also check without tag (partial match would need different query)
+				// For now, check common tags
+				for _, tag := range []string{"1", "latest", "main", "master"} {
+					inspections, err := m.database.GetLayerInspectionsByImage(r.Name + ":" + tag)
+					if err == nil && len(inspections) > 0 {
+						m.cachedImages[r.Name] = len(inspections)
+						break
+					}
+				}
+			}
+		}
+	}
+
 	rows := make([]table.Row, len(m.results.Results))
 	for i, r := range m.results.Results {
-		// Truncate description if too long
 		desc := r.ShortDescription
-		if len(desc) > 40 {
-			desc = desc[:37] + "..."
+
+		var badge string
+		switch r.Badge {
+		case "verified_publisher":
+			badge = "Verified"
+		case "official":
+			badge = "Official"
 		}
 
-		badge := r.Badge
-		if badge == "verified_publisher" {
-			badge = "Verified"
-		} else if badge == "official" {
-			badge = "Official"
-		} else {
-			badge = ""
+		// Add cached indicator to name if we have layer data
+		name := r.Name
+		if layerCount, ok := m.cachedImages[r.Name]; ok {
+			name = fmt.Sprintf("[%d] %s", layerCount, r.Name)
 		}
 
 		rows[i] = table.Row{
-			r.Name,
+			name,
 			r.Publisher,
 			fmt.Sprintf("%d", r.StarCount),
 			r.PullCount,
@@ -281,6 +322,37 @@ func (m *DockerHubSearchModel) updateTable() {
 		}
 	}
 
+	// Calculate column widths from content (except Description)
+	headers := []string{"Name", "Publisher", "Stars", "Pulls", "Badge", "Description"}
+	widths := make([]int, len(headers))
+	for i, h := range headers {
+		widths[i] = len(h)
+	}
+	for _, row := range rows {
+		for i := 0; i < 5; i++ { // Skip Description (index 5)
+			if len(row[i]) > widths[i] {
+				widths[i] = len(row[i])
+			}
+		}
+	}
+
+	// Description gets remaining space
+	usedWidth := widths[0] + widths[1] + widths[2] + widths[3] + widths[4]
+	separators := 7 // table borders and column separators
+	widths[5] = m.layout.ViewportWidth - usedWidth - separators
+	if widths[5] < len(headers[5]) {
+		widths[5] = len(headers[5])
+	}
+
+	columns := []table.Column{
+		{Title: "Name", Width: widths[0]},
+		{Title: "Publisher", Width: widths[1]},
+		{Title: "Stars", Width: widths[2]},
+		{Title: "Pulls", Width: widths[3]},
+		{Title: "Badge", Width: widths[4]},
+		{Title: "Description", Width: widths[5]},
+	}
+	m.table.SetColumns(columns)
 	m.table.SetRows(rows)
 }
 
@@ -301,7 +373,7 @@ func (m DockerHubSearchModel) renderTableWithSelection() string {
 	for i, line := range lines {
 		dataRowIndex := i - headerLines
 		if dataRowIndex >= 0 && dataRowIndex == cursor {
-			result = append(result, SelectedStyle.Width(m.layout.InnerWidth).Render(line))
+			result = append(result, SelectedStyle.Render(line))
 		} else {
 			result = append(result, line)
 		}
@@ -315,21 +387,77 @@ func (m DockerHubSearchModel) ShouldReturnToMain() bool {
 	return m.returnToMain
 }
 
-// RunDockerHubSearch starts the Docker Hub search TUI
-func RunDockerHubSearch(logger *log.Logger) error {
-	model := NewDockerHubSearchModel(logger)
-	p := tea.NewProgram(model, tea.WithAltScreen())
-
-	finalModel, err := p.Run()
-	if err != nil {
-		return err
-	}
-
-	// Check if user wants to return to main
-	if m, ok := finalModel.(DockerHubSearchModel); ok && m.ShouldReturnToMain() {
-		return nil
-	}
-
-	return nil
+// ShouldLaunchInspector returns true if user wants to inspect an image
+func (m DockerHubSearchModel) ShouldLaunchInspector() bool {
+	return m.launchInspector
 }
 
+// SelectedImage returns the image name selected for inspection
+func (m DockerHubSearchModel) SelectedImage() string {
+	return m.selectedImage
+}
+
+// RunDockerHubSearch starts the Docker Hub search TUI
+func RunDockerHubSearch(logger *log.Logger, database *db.DB) error {
+	// Keep track of the last search state to restore after inspector
+	var lastQuery string
+	var lastResults *api.DockerHubSearchResponse
+	var lastPage int
+
+	for {
+		model := NewDockerHubSearchModel(logger, database)
+
+		// Restore previous search state if we have it
+		if lastQuery != "" && lastResults != nil {
+			model.query = lastQuery
+			model.results = lastResults
+			model.page = lastPage
+			model.inputMode = false // Start in table mode with results
+			model.updateTable()     // Rebuild table rows from restored results
+		}
+
+		p := tea.NewProgram(model, tea.WithAltScreen())
+
+		finalModel, err := p.Run()
+		if err != nil {
+			return err
+		}
+
+		m, ok := finalModel.(DockerHubSearchModel)
+		if !ok {
+			return nil
+		}
+
+		// Check if user wants to return to main
+		if m.ShouldReturnToMain() {
+			return nil
+		}
+
+		// Check if user wants to inspect an image
+		if m.ShouldLaunchInspector() && m.SelectedImage() != "" {
+			// Save current search state before launching inspector
+			lastQuery = m.query
+			lastResults = m.results
+			lastPage = m.page
+
+			// Prompt for tag
+			tag, err := PromptForTag(m.SelectedImage())
+			if err != nil {
+				// User cancelled, go back to search with preserved state
+				continue
+			}
+
+			imageRef := m.SelectedImage() + ":" + tag
+
+			// Run the layer inspector
+			if err := RunLayerInspectorWithDB(imageRef, database); err != nil {
+				PrintError(fmt.Sprintf("Layer inspector error: %v", err))
+			}
+
+			// After inspector exits, loop back to search with preserved state
+			continue
+		}
+
+		return nil
+	}
+}

@@ -145,8 +145,24 @@ func main() {
 				
 				// If user wants to launch Docker Hub search
 				if result.LaunchDockerSearch {
-					if err := ui.RunDockerHubSearch(nil); err != nil {
+					if err := ui.RunDockerHubSearch(nil, database); err != nil {
 						ui.PrintError(fmt.Sprintf("Docker Hub search failed: %v", err))
+					}
+					continue // Return to main TUI after search
+				}
+
+				// If user wants to browse cached layers
+				if result.LaunchCachedLayers {
+					if err := ui.RunCachedLayersBrowser(database); err != nil {
+						ui.PrintError(fmt.Sprintf("Cached layers browser failed: %v", err))
+					}
+					continue // Return to main TUI after browsing
+				}
+
+				// If user wants to search cached layers
+				if result.LaunchSearchCachedLayers {
+					if err := ui.RunSearchCachedLayers(database); err != nil {
+						ui.PrintError(fmt.Sprintf("Search cached layers failed: %v", err))
 					}
 					continue // Return to main TUI after search
 				}
