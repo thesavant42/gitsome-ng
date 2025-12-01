@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
@@ -40,7 +41,7 @@ func NewLayout(terminalWidth, terminalHeight int) Layout {
 		ViewportWidth:  width, // full terminal width for border
 		ViewportHeight: terminalHeight,
 		ContentWidth:   width - 2,   // content inside border
-		TableWidth:     width - 6,   // minus border + padding
+		TableWidth:     width - 4,   // minus border (2) + minimal table padding (2)
 		TableHeight:    tableHeight, // dynamic table height
 		InnerWidth:     width - 2,   // ViewportWidth - 2 (content inside borders)
 	}
@@ -198,6 +199,28 @@ var (
 				Foreground(ColorAccent).
 				Background(ColorHighlight).
 				Bold(true)
+
+	// Dim text style (gray) - for secondary/muted information
+	DimStyle = lipgloss.NewStyle().
+			Foreground(ColorTextDim)
+
+	// Description style for list item descriptions
+	DescStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("244"))
+
+	// Status message style - white on red highlight
+	StatusMsgStyle = lipgloss.NewStyle().
+			Foreground(ColorText).
+			Background(ColorHighlight).
+			Padding(0, 1)
+
+	// Progress bar filled style (red)
+	ProgressFilledStyle = lipgloss.NewStyle().
+				Foreground(ColorBorder)
+
+	// Progress bar empty style (gray)
+	ProgressEmptyStyle = lipgloss.NewStyle().
+				Foreground(ColorTextDim)
 )
 
 // BorderedBox returns a style for bordered content boxes with the layout width
@@ -211,6 +234,35 @@ func BorderedBox(layout Layout) lipgloss.Style {
 func BorderedBoxDefault() lipgloss.Style {
 	return BorderedBox(DefaultLayout())
 }
+
+// ApplyTableStyles applies the app's standard styling to a table
+// This centralizes table styling so we don't use lipgloss directly in other files
+func ApplyTableStyles(t *table.Model) {
+	s := table.DefaultStyles()
+	s.Header = s.Header.
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(ColorText).
+		BorderBottom(true).
+		Bold(true).
+		Foreground(ColorText)
+	s.Selected = s.Selected.
+		Foreground(ColorText).
+		Background(ColorHighlight).
+		Bold(true)
+	s.Cell = s.Cell.Foreground(ColorText)
+	t.SetStyles(s)
+}
+
+// NewAppSpinner creates a spinner with the app's standard styling
+func NewAppSpinner() spinner.Model {
+	s := spinner.New()
+	s.Spinner = spinner.Dot
+	s.Style = lipgloss.NewStyle().Foreground(ColorBorder)
+	return s
+}
+
+// SpinnerStyle is the style for spinner text
+var SpinnerStyle = lipgloss.NewStyle().Foreground(ColorBorder)
 
 // NewAppTheme creates a huh theme matching the app's style guide
 // White text, red highlights/selection

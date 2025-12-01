@@ -47,7 +47,7 @@ func NewDockerHubSearchModel(logger *log.Logger, database *db.DB) DockerHubSearc
 	ti.Placeholder = "Enter search term..."
 	ti.Focus()
 	ti.CharLimit = 100
-	ti.Width = 50
+	// ti.Width is set dynamically in Update() on tea.WindowSizeMsg
 
 	// Calculate layout
 	layout := DefaultLayout()
@@ -66,21 +66,11 @@ func NewDockerHubSearchModel(logger *log.Logger, database *db.DB) DockerHubSearc
 		table.WithColumns(columns),
 		table.WithRows([]table.Row{}),
 		table.WithFocused(true),
-		table.WithHeight(TableHeight),
+		table.WithHeight(layout.TableHeight),
 	)
 
-	// Style the table
-	s := table.DefaultStyles()
-	s.Header = s.Header.
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(ColorBorder).
-		BorderBottom(true).
-		Bold(true)
-	s.Selected = s.Selected.
-		Foreground(ColorText).
-		Background(lipgloss.NoColor{}).
-		Bold(true)
-	t.SetStyles(s)
+	// Apply standard table styles (same as layerslayer.go)
+	ApplyTableStyles(&t)
 
 	return DockerHubSearchModel{
 		client:       api.NewDockerHubClient(logger),
@@ -105,7 +95,9 @@ func (m DockerHubSearchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.layout = NewLayout(msg.Width, msg.Height)
-		m.table.SetHeight(TableHeight)
+		m.table.SetHeight(m.layout.TableHeight)
+		// Update text input width dynamically
+		m.textInput.Width = m.layout.InnerWidth - 10
 		if m.results != nil {
 			m.updateTable()
 		}
@@ -235,15 +227,21 @@ func (m DockerHubSearchModel) View() string {
 		} else if m.err != nil {
 			contentBuilder.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render(fmt.Sprintf(" Error: %v", m.err)))
 		} else {
-			// Render table with selection highlighting
-			tableView := m.renderTableWithSelection()
-			contentBuilder.WriteString(tableView)
+			// Render table directly (no custom styling - let bubbles handle it)
+			contentBuilder.WriteString(m.table.View())
 		}
 	}
 
-	// Wrap in bordered box with padding like main TUI
+	// Calculate available height for border (viewport - top margin - footer - border overhead)
+	availableHeight := m.layout.ViewportHeight - 4
+	if availableHeight < 10 {
+		availableHeight = 10
+	}
+
+	// Wrap in bordered box - match tui.go pattern exactly with dynamic height
 	borderedContent := BorderStyle.
-		Padding(1, 0).
+		Width(m.layout.InnerWidth).
+		Height(availableHeight).
 		Render(contentBuilder.String())
 	b.WriteString(borderedContent)
 	b.WriteString("\n")
@@ -294,9 +292,42 @@ func (m *DockerHubSearchModel) updateTable() {
 		}
 	}
 
+	// Calculate column widths to fill content area
+	// Content area inside border = InnerWidth - 2 (border padding, same as layerslayer.go)
+	// Bubbles table does NOT add gaps between columns - widths are exact
+	totalW := m.layout.InnerWidth - 2
+	if totalW < 50 {
+		totalW = 50
+	}
+
+	// Fixed column widths - keep small to leave room for Description
+	nameW := 14
+	publisherW := 8
+	starsW := 5
+	pullsW := 5
+	badgeW := 8
+	fixedTotal := nameW + publisherW + starsW + pullsW + badgeW // = 40
+
+	// Description gets remaining space
+	descW := totalW - fixedTotal
+	if descW < 10 {
+		descW = 10
+	}
+
+	// Helper to truncate string to width
+	truncate := func(s string, w int) string {
+		if len(s) <= w {
+			return s
+		}
+		if w <= 3 {
+			return s[:w]
+		}
+		return s[:w-3] + "..."
+	}
+
 	rows := make([]table.Row, len(m.results.Results))
 	for i, r := range m.results.Results {
-		desc := r.ShortDescription
+		desc := truncate(r.ShortDescription, descW)
 
 		var badge string
 		switch r.Badge {
@@ -311,83 +342,33 @@ func (m *DockerHubSearchModel) updateTable() {
 		if layerCount, ok := m.cachedImages[r.Name]; ok {
 			name = fmt.Sprintf("[%d] %s", layerCount, r.Name)
 		}
+		name = truncate(name, nameW)
+		publisher := truncate(r.Publisher, publisherW)
+		stars := truncate(fmt.Sprintf("%d", r.StarCount), starsW)
+		pulls := truncate(r.PullCount, pullsW)
+		badge = truncate(badge, badgeW)
 
 		rows[i] = table.Row{
 			name,
-			r.Publisher,
-			fmt.Sprintf("%d", r.StarCount),
-			r.PullCount,
+			publisher,
+			stars,
+			pulls,
 			badge,
 			desc,
 		}
 	}
 
-	// Calculate column widths from content (except Description)
-	headers := []string{"Name", "Publisher", "Stars", "Pulls", "Badge", "Description"}
-	widths := make([]int, len(headers))
-	for i, h := range headers {
-		widths[i] = len(h)
-	}
-	for _, row := range rows {
-		for i := 0; i < 5; i++ { // Skip Description (index 5)
-			if len(row[i]) > widths[i] {
-				widths[i] = len(row[i])
-			}
-		}
-	}
-
-	// Description gets remaining space
-	usedWidth := widths[0] + widths[1] + widths[2] + widths[3] + widths[4]
-	separators := 7 // table borders and column separators
-	widths[5] = m.layout.ViewportWidth - usedWidth - separators
-	if widths[5] < len(headers[5]) {
-		widths[5] = len(headers[5])
-	}
-
+	// Set columns with calculated widths
 	columns := []table.Column{
-		{Title: "Name", Width: widths[0]},
-		{Title: "Publisher", Width: widths[1]},
-		{Title: "Stars", Width: widths[2]},
-		{Title: "Pulls", Width: widths[3]},
-		{Title: "Badge", Width: widths[4]},
-		{Title: "Description", Width: widths[5]},
+		{Title: "Name", Width: nameW},
+		{Title: "Publisher", Width: publisherW},
+		{Title: "Stars", Width: starsW},
+		{Title: "Pulls", Width: pullsW},
+		{Title: "Badge", Width: badgeW},
+		{Title: "Description", Width: descW},
 	}
 	m.table.SetColumns(columns)
 	m.table.SetRows(rows)
-}
-
-// renderTableWithSelection renders the table with custom selection highlighting
-func (m DockerHubSearchModel) renderTableWithSelection() string {
-	if m.results == nil || len(m.results.Results) == 0 {
-		return HintStyle.Render("  No results found")
-	}
-
-	// Get table view and split into lines
-	tableView := m.table.View()
-	lines := strings.Split(tableView, "\n")
-
-	cursor := m.table.Cursor()
-	headerLines := 2 // Header + border
-
-	// Calculate the width for the selection bar - match table content width
-	// Use layout width minus border padding (2 chars for border)
-	selectionWidth := m.layout.ViewportWidth - 4
-	if selectionWidth < 40 {
-		selectionWidth = 40
-	}
-
-	var result []string
-	for i, line := range lines {
-		dataRowIndex := i - headerLines
-		if dataRowIndex >= 0 && dataRowIndex == cursor {
-			// Apply selection style with constrained width to match table
-			result = append(result, SelectedStyle.Width(selectionWidth).Render(line))
-		} else {
-			result = append(result, line)
-		}
-	}
-
-	return strings.Join(result, "\n")
 }
 
 // ShouldReturnToMain returns true if user wants to go back

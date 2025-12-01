@@ -106,6 +106,12 @@ func New(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("failed to create layer inspections schema: %w", err)
 	}
 
+	// Initialize image manifests table (for build steps)
+	if _, err := conn.Exec(createImageManifestsTable); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to create image manifests schema: %w", err)
+	}
+
 	// Run migrations to add new columns to existing tables
 	// These will silently fail if columns already exist
 	migrations := []string{
@@ -134,12 +140,12 @@ func ListProjectFiles(dir string) ([]string, error) {
 	if dir == "" {
 		dir = "."
 	}
-	
+
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read directory: %w", err)
 	}
-	
+
 	var projects []string
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -634,13 +640,13 @@ func (db *DB) DeleteRepositoryData(repoOwner, repoName string) error {
 	if err != nil {
 		return fmt.Errorf("failed to delete repository commits: %w", err)
 	}
-	
+
 	// Delete all tags for this repo
 	db.conn.Exec("DELETE FROM committer_tags WHERE repo_owner = ? AND repo_name = ?", repoOwner, repoName)
-	
+
 	// Delete all links for this repo
 	db.conn.Exec("DELETE FROM committer_links WHERE repo_owner = ? AND repo_name = ?", repoOwner, repoName)
-	
+
 	return nil
 }
 
@@ -1023,11 +1029,11 @@ func (db *DB) GetAPILogs(limit int) ([]map[string]interface{}, error) {
 	for rows.Next() {
 		var id, statusCode, rateLimitRemaining sql.NullInt64
 		var timestamp, method, endpoint, errorMsg, rateLimitReset, login sql.NullString
-		
+
 		if err := rows.Scan(&id, &timestamp, &method, &endpoint, &statusCode, &errorMsg, &rateLimitRemaining, &rateLimitReset, &login); err != nil {
 			return nil, fmt.Errorf("failed to scan API log: %w", err)
 		}
-		
+
 		log := map[string]interface{}{
 			"id":                   id.Int64,
 			"timestamp":            timestamp.String,
@@ -1056,11 +1062,11 @@ func (db *DB) GetAPILogsByLogin(login string, limit int) ([]map[string]interface
 	for rows.Next() {
 		var id, statusCode, rateLimitRemaining sql.NullInt64
 		var timestamp, method, endpoint, errorMsg, rateLimitReset, loginVal sql.NullString
-		
+
 		if err := rows.Scan(&id, &timestamp, &method, &endpoint, &statusCode, &errorMsg, &rateLimitRemaining, &rateLimitReset, &loginVal); err != nil {
 			return nil, fmt.Errorf("failed to scan API log: %w", err)
 		}
-		
+
 		log := map[string]interface{}{
 			"id":                   id.Int64,
 			"timestamp":            timestamp.String,
@@ -1658,3 +1664,92 @@ func (db *DB) SearchLocalKeyword(keyword string) ([]LocalSearchResult, error) {
 	return results, nil
 }
 
+// ImageManifest represents a cached Docker image manifest with build steps
+type ImageManifest struct {
+	ID           int
+	ImageRef     string
+	Platform     string
+	BuildSteps   []string
+	ConfigDigest string
+	LayerCount   int
+	TotalSize    int64
+	FetchedAt    time.Time
+}
+
+// SaveImageManifest saves an image manifest with build steps to the database
+func (db *DB) SaveImageManifest(imageRef, platform string, buildSteps []string, configDigest string, layerCount int, totalSize int64) error {
+	// Serialize build steps to JSON
+	stepsJSON := "[]"
+	if len(buildSteps) > 0 {
+		bytes, err := json.Marshal(buildSteps)
+		if err != nil {
+			return fmt.Errorf("failed to marshal build steps: %w", err)
+		}
+		stepsJSON = string(bytes)
+	}
+
+	_, err := db.conn.Exec(insertImageManifest, imageRef, platform, stepsJSON, configDigest, layerCount, totalSize)
+	if err != nil {
+		return fmt.Errorf("failed to save image manifest: %w", err)
+	}
+	return nil
+}
+
+// GetImageManifest retrieves an image manifest by image ref
+func (db *DB) GetImageManifest(imageRef string) (*ImageManifest, error) {
+	var im ImageManifest
+	var fetchedAt string
+	var platform, buildStepsJSON, configDigest sql.NullString
+	var layerCount sql.NullInt64
+	var totalSize sql.NullInt64
+
+	err := db.conn.QueryRow(selectImageManifest, imageRef).Scan(
+		&im.ID, &im.ImageRef, &platform, &buildStepsJSON, &configDigest,
+		&layerCount, &totalSize, &fetchedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil // Not found
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get image manifest: %w", err)
+	}
+
+	im.Platform = platform.String
+	im.ConfigDigest = configDigest.String
+	im.LayerCount = int(layerCount.Int64)
+	im.TotalSize = totalSize.Int64
+	im.FetchedAt, _ = parseTimestamp(fetchedAt)
+
+	// Parse build steps from JSON
+	if buildStepsJSON.Valid && buildStepsJSON.String != "" && buildStepsJSON.String != "[]" {
+		if err := json.Unmarshal([]byte(buildStepsJSON.String), &im.BuildSteps); err != nil {
+			im.BuildSteps = nil
+		}
+	}
+
+	return &im, nil
+}
+
+// GetImageBuildSteps retrieves just the build steps for an image
+func (db *DB) GetImageBuildSteps(imageRef string) ([]string, error) {
+	var buildStepsJSON sql.NullString
+
+	err := db.conn.QueryRow(selectImageManifestBuildSteps, imageRef).Scan(&buildStepsJSON)
+	if err == sql.ErrNoRows {
+		return nil, nil // Not found
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get build steps: %w", err)
+	}
+
+	if !buildStepsJSON.Valid || buildStepsJSON.String == "" || buildStepsJSON.String == "[]" {
+		return nil, nil
+	}
+
+	var steps []string
+	if err := json.Unmarshal([]byte(buildStepsJSON.String), &steps); err != nil {
+		return nil, fmt.Errorf("failed to parse build steps: %w", err)
+	}
+
+	return steps, nil
+}

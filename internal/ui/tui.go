@@ -182,6 +182,8 @@ type TUIModel struct {
 	userGistFiles       []gistFileEntry         // flattened gist files for display
 	userDetailTab       int                     // 0 = profile, 1 = repos, 2 = gists
 	userDetailCursor    int                     // cursor position in detail view
+	userReposTable      table.Model             // bubbles table for repos tab
+	userGistsTable      table.Model             // bubbles table for gists tab
 
 	// Processed users cache - logins with fetched data show [!] instead of [x]
 	processedLogins map[string]bool
@@ -450,6 +452,180 @@ func (m TUIModel) Init() tea.Cmd {
 	return tea.ClearScreen
 }
 
+// initUserReposTable initializes the repos table with dynamic column widths
+func (m *TUIModel) initUserReposTable() {
+	// Calculate column widths using TableWidth from Layout
+	totalW := m.layout.TableWidth
+	if totalW < 50 {
+		totalW = 50
+	}
+
+	// Column widths: Name (variable), Lang (10), Stars (6), Forks (6), Commits (8), Visibility (10)
+	langW := 10
+	starsW := 6
+	forksW := 6
+	commitsW := 8
+	visibilityW := 10
+	nameW := totalW - langW - starsW - forksW - commitsW - visibilityW
+	if nameW < 15 {
+		nameW = 15
+	}
+
+	columns := []table.Column{
+		{Title: "Name", Width: nameW},
+		{Title: "Lang", Width: langW},
+		{Title: "Stars", Width: starsW},
+		{Title: "Forks", Width: forksW},
+		{Title: "Commits", Width: commitsW},
+		{Title: "Visibility", Width: visibilityW},
+	}
+
+	// Build table rows
+	rows := make([]table.Row, len(m.userRepos))
+	for i, repo := range m.userRepos {
+		name := repo.Name
+		if len(name) > nameW-2 {
+			name = name[:nameW-5] + "..."
+		}
+		lang := repo.PrimaryLanguage
+		if lang == "" {
+			lang = "-"
+		}
+		if len(lang) > langW-1 {
+			lang = lang[:langW-2] + "…"
+		}
+		rows[i] = table.Row{
+			name,
+			lang,
+			fmt.Sprintf("%d", repo.StargazerCount),
+			fmt.Sprintf("%d", repo.ForkCount),
+			fmt.Sprintf("%d", repo.CommitCount),
+			repo.Visibility,
+		}
+	}
+
+	t := table.New(
+		table.WithColumns(columns),
+		table.WithRows(rows),
+		table.WithFocused(true),
+		table.WithHeight(m.layout.TableHeight),
+	)
+
+	ApplyTableStyles(&t)
+	m.userReposTable = t
+}
+
+// initUserGistsTable initializes the gists table with dynamic column widths
+func (m *TUIModel) initUserGistsTable() {
+	// Calculate column widths using TableWidth from Layout
+	totalW := m.layout.TableWidth
+	if totalW < 60 {
+		totalW = 60
+	}
+
+	// Column widths: Filename (variable), Lang (10), Size (8), Rev (4), Updated (10), GUID (12), Count (8)
+	langW := 10
+	sizeW := 8
+	revW := 4
+	updatedW := 10
+	guidW := 12
+	countW := 8
+	filenameW := totalW - langW - sizeW - revW - updatedW - guidW - countW
+	if filenameW < 20 {
+		filenameW = 20
+	}
+
+	columns := []table.Column{
+		{Title: "Filename", Width: filenameW},
+		{Title: "Language", Width: langW},
+		{Title: "Size", Width: sizeW},
+		{Title: "Rev", Width: revW},
+		{Title: "Updated", Width: updatedW},
+		{Title: "GUID", Width: guidW},
+		{Title: "Count", Width: countW},
+	}
+
+	// Build table rows - skip dividers and show file data with gist info
+	var rows []table.Row
+	var pendingGistInfo *gistFileEntry
+
+	for _, file := range m.userGistFiles {
+		if file.IsDivider {
+			pendingGistInfo = &gistFileEntry{
+				GistURL:       file.GistURL,
+				GistID:        file.GistID,
+				RevisionCount: file.RevisionCount,
+				UpdatedAt:     file.UpdatedAt,
+				FileCount:     file.FileCount,
+			}
+			continue
+		}
+
+		name := file.FileName
+		if len(name) > filenameW-2 {
+			name = name[:filenameW-5] + "..."
+		}
+		lang := file.Language
+		if lang == "" {
+			lang = "-"
+		}
+		if len(lang) > langW-1 {
+			lang = lang[:langW-2] + "…"
+		}
+
+		// Format size
+		sizeStr := fmt.Sprintf("%dB", file.Size)
+		if file.Size >= 1024 {
+			sizeStr = fmt.Sprintf("%.1fK", float64(file.Size)/1024)
+		}
+
+		// Show gist info on first file of each gist
+		var updated, guid, countLabel string
+		if pendingGistInfo != nil {
+			updated = pendingGistInfo.UpdatedAt
+			if len(updated) > 10 {
+				updated = updated[:10]
+			}
+			guid = pendingGistInfo.GistID
+			if len(guid) > 12 {
+				guid = guid[len(guid)-12:]
+			}
+			countLabel = fmt.Sprintf("%d", pendingGistInfo.FileCount)
+			pendingGistInfo = nil
+		}
+
+		rows = append(rows, table.Row{
+			name,
+			lang,
+			sizeStr,
+			fmt.Sprintf("%d", file.RevisionCount),
+			updated,
+			guid,
+			countLabel,
+		})
+	}
+
+	t := table.New(
+		table.WithColumns(columns),
+		table.WithRows(rows),
+		table.WithFocused(true),
+		table.WithHeight(m.layout.TableHeight),
+	)
+
+	ApplyTableStyles(&t)
+	m.userGistsTable = t
+}
+
+// updateUserDetailTables updates the repos and gists tables after window resize
+func (m *TUIModel) updateUserDetailTables() {
+	if len(m.userRepos) > 0 {
+		m.initUserReposTable()
+	}
+	if len(m.userGistFiles) > 0 {
+		m.initUserGistsTable()
+	}
+}
+
 // Update implements tea.Model
 func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
@@ -460,6 +636,10 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.layout = NewLayout(msg.Width, msg.Height)
 		m.progressBar.Width = m.layout.ContentWidth - 4
 		m.rebuildTable()
+		// Update user detail tables if visible
+		if m.userDetailVisible {
+			m.updateUserDetailTables()
+		}
 		return m, nil
 
 	// Handle progress bar frame messages for animation
@@ -1803,6 +1983,8 @@ func (m *TUIModel) startUserQuery(login string, _, _ int) tea.Cmd {
 
 // handleUserDetailView handles key events in user detail view
 func (m TUIModel) handleUserDetailView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
 	switch msg.String() {
 	case "esc", "q":
 		m.userDetailVisible = false
@@ -1812,58 +1994,56 @@ func (m TUIModel) handleUserDetailView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Cycle forward: Profile(0) -> Repos(1) -> Gists(2) -> Profile(0)
 		m.userDetailTab = (m.userDetailTab + 1) % 3
 		m.userDetailCursor = 0
+		// Reset table cursors when switching tabs
+		if m.userDetailTab == 1 && len(m.userRepos) > 0 {
+			m.userReposTable.SetCursor(0)
+		} else if m.userDetailTab == 2 {
+			m.userGistsTable.SetCursor(0)
+		}
 		return m, nil
 
 	case "left", "h":
 		// Cycle backward: Profile(0) <- Repos(1) <- Gists(2)
 		m.userDetailTab = (m.userDetailTab + 2) % 3
 		m.userDetailCursor = 0
+		// Reset table cursors when switching tabs
+		if m.userDetailTab == 1 && len(m.userRepos) > 0 {
+			m.userReposTable.SetCursor(0)
+		} else if m.userDetailTab == 2 {
+			m.userGistsTable.SetCursor(0)
+		}
 		return m, nil
 
 	case "up", "k":
-		// Tab 0 = Profile, Tab 1 = Repos, Tab 2 = Gists
+		// Tab 0 = Profile (manual), Tab 1 = Repos (table), Tab 2 = Gists (table)
 		if m.userDetailTab == 0 && m.userDetailCursor > 0 {
-			// Navigate profile rows
+			// Navigate profile rows manually
 			m.userDetailCursor--
+		} else if m.userDetailTab == 1 {
+			// Let table handle navigation
+			m.userReposTable, cmd = m.userReposTable.Update(msg)
+			return m, cmd
 		} else if m.userDetailTab == 2 {
-			// Skip dividers when navigating gists
-			for {
-				if m.userDetailCursor <= 0 {
-					break
-				}
-				m.userDetailCursor--
-				if !m.userGistFiles[m.userDetailCursor].IsDivider {
-					break
-				}
-			}
-		} else if m.userDetailTab > 0 && m.userDetailCursor > 0 {
-			m.userDetailCursor--
+			// Let table handle navigation
+			m.userGistsTable, cmd = m.userGistsTable.Update(msg)
+			return m, cmd
 		}
 		return m, nil
 
 	case "down", "j":
-		maxItems := 0
-		switch m.userDetailTab {
-		case 0:
-			maxItems = len(m.userProfileRows)
-		case 1:
-			maxItems = len(m.userRepos)
-		case 2:
-			maxItems = len(m.userGistFiles)
-			// Skip dividers when navigating gists
-			for {
-				if m.userDetailCursor >= maxItems-1 {
-					break
-				}
+		if m.userDetailTab == 0 {
+			// Navigate profile rows manually
+			if m.userDetailCursor < len(m.userProfileRows)-1 {
 				m.userDetailCursor++
-				if !m.userGistFiles[m.userDetailCursor].IsDivider {
-					break
-				}
 			}
-			return m, nil
-		}
-		if m.userDetailCursor < maxItems-1 {
-			m.userDetailCursor++
+		} else if m.userDetailTab == 1 {
+			// Let table handle navigation
+			m.userReposTable, cmd = m.userReposTable.Update(msg)
+			return m, cmd
+		} else if m.userDetailTab == 2 {
+			// Let table handle navigation
+			m.userGistsTable, cmd = m.userGistsTable.Update(msg)
+			return m, cmd
 		}
 		return m, nil
 
@@ -1877,26 +2057,32 @@ func (m TUIModel) handleUserDetailView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		// Tab 1: Repos - open selected repo in browser
-		if m.userDetailTab == 1 && m.userDetailCursor < len(m.userRepos) {
-			repo := m.userRepos[m.userDetailCursor]
-			if repo.URL != "" {
-				openURL(repo.URL)
+		if m.userDetailTab == 1 && len(m.userRepos) > 0 {
+			cursor := m.userReposTable.Cursor()
+			if cursor >= 0 && cursor < len(m.userRepos) {
+				repo := m.userRepos[cursor]
+				if repo.URL != "" {
+					openURL(repo.URL)
+				}
 			}
 		}
-		// Tab 2: Gists - open selected gist file in browser
-		if m.userDetailTab == 2 && m.userDetailCursor < len(m.userGistFiles) {
-			file := m.userGistFiles[m.userDetailCursor]
-			if !file.IsDivider && file.GistURL != "" {
-				// Construct file-specific URL: base_gist_url#file-filename-ext
-				fileURL := file.GistURL
-				if file.FileName != "" {
-					// GitHub gist file anchor format: #file-name-with-dashes-extension
-					anchor := strings.ReplaceAll(file.FileName, ".", "-")
-					anchor = strings.ReplaceAll(anchor, "_", "-")
-					anchor = strings.ToLower(anchor)
-					fileURL = fileURL + "#file-" + anchor
+		// Tab 2: Gists - open selected gist file in browser (need to map table cursor back to file index)
+		if m.userDetailTab == 2 {
+			cursor := m.userGistsTable.Cursor()
+			// Map table cursor to actual file index (skipping dividers)
+			fileIdx := m.getGistFileIndexFromTableCursor(cursor)
+			if fileIdx >= 0 && fileIdx < len(m.userGistFiles) {
+				file := m.userGistFiles[fileIdx]
+				if !file.IsDivider && file.GistURL != "" {
+					fileURL := file.GistURL
+					if file.FileName != "" {
+						anchor := strings.ReplaceAll(file.FileName, ".", "-")
+						anchor = strings.ReplaceAll(anchor, "_", "-")
+						anchor = strings.ToLower(anchor)
+						fileURL = fileURL + "#file-" + anchor
+					}
+					openURL(fileURL)
 				}
-				openURL(fileURL)
 			}
 		}
 		return m, nil
@@ -1911,10 +2097,14 @@ func (m TUIModel) handleUserDetailView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "d", "D", "delete":
 		// Delete selected repo or gist
-		if m.userDetailTab == 1 && m.userDetailCursor < len(m.userRepos) {
+		if m.userDetailTab == 1 && len(m.userRepos) > 0 {
 			// Delete repo
-			repo := m.userRepos[m.userDetailCursor]
-			m.deleteTargetIndex = m.userDetailCursor
+			cursor := m.userReposTable.Cursor()
+			if cursor < 0 || cursor >= len(m.userRepos) {
+				return m, nil
+			}
+			repo := m.userRepos[cursor]
+			m.deleteTargetIndex = cursor
 			m.deleteTargetType = "repo"
 
 			m.deleteConfirmForm = huh.NewForm(
@@ -1931,10 +2121,15 @@ func (m TUIModel) handleUserDetailView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.deleteConfirmVisible = true
 			return m, m.deleteConfirmForm.Init()
 
-		} else if m.userDetailTab == 2 && m.userDetailCursor < len(m.userGistFiles) {
+		} else if m.userDetailTab == 2 {
 			// Delete gist
-			gf := m.userGistFiles[m.userDetailCursor]
-			m.deleteTargetIndex = m.userDetailCursor
+			cursor := m.userGistsTable.Cursor()
+			fileIdx := m.getGistFileIndexFromTableCursor(cursor)
+			if fileIdx < 0 || fileIdx >= len(m.userGistFiles) {
+				return m, nil
+			}
+			gf := m.userGistFiles[fileIdx]
+			m.deleteTargetIndex = fileIdx
 			m.deleteTargetType = "gist"
 
 			// Different message for divider row vs file row
@@ -2237,6 +2432,29 @@ func (m *TUIModel) showUserDetail(login, name, email string) {
 	m.userDetailTab = 0
 	m.userDetailCursor = 0
 	m.userDetailVisible = true
+
+	// Initialize tables for repos and gists tabs
+	m.initUserReposTable()
+	m.initUserGistsTable()
+}
+
+// getGistFileIndexFromTableCursor maps a table cursor position back to the original userGistFiles index
+// Since we skip dividers when building table rows, we need to map back
+func (m *TUIModel) getGistFileIndexFromTableCursor(tableCursor int) int {
+	if tableCursor < 0 {
+		return -1
+	}
+	tableRow := 0
+	for i, file := range m.userGistFiles {
+		if file.IsDivider {
+			continue
+		}
+		if tableRow == tableCursor {
+			return i
+		}
+		tableRow++
+	}
+	return -1
 }
 
 // executeDelete performs the actual delete operation after confirmation
@@ -2780,8 +2998,14 @@ func (m TUIModel) renderAddRepo() string {
 	b.WriteString(m.addRepoInput)
 	b.WriteString("_")
 
-	// Add border with width from layout
-	borderStyle := BorderStyle.Width(m.layout.ViewportWidth).MarginTop(1)
+	// Calculate available height for border (viewport - top margin - footer - border overhead)
+	availableHeight := m.layout.ViewportHeight - 4
+	if availableHeight < 10 {
+		availableHeight = 10
+	}
+
+	// Add border with width from layout (InnerWidth so total = ViewportWidth) and dynamic height
+	borderStyle := BorderStyle.Width(m.layout.InnerWidth).Height(availableHeight).MarginTop(1)
 
 	var result strings.Builder
 	result.WriteString(borderStyle.Render(b.String()))
@@ -2926,138 +3150,18 @@ func (m TUIModel) renderUserDetail() string {
 			b.WriteString("\n")
 		}
 	} else if m.userDetailTab == 1 {
-		// Repos tab
+		// Repos tab - use Bubbles table
 		if len(m.userRepos) == 0 {
 			b.WriteString(HintStyle.Render("No repositories found."))
 		} else {
-			// Show header with Language column
-			b.WriteString(NormalStyle.Render(fmt.Sprintf("%-26s %-10s %-6s %-6s %-7s %-10s", "Name", "Lang", "Stars", "Forks", "Commits", "Visibility")))
-			b.WriteString("\n")
-			b.WriteString(strings.Repeat("─", m.layout.InnerWidth))
-			b.WriteString("\n")
-
-			// Show repos (limited to 15 visible)
-			startIdx := 0
-			if m.userDetailCursor >= 15 {
-				startIdx = m.userDetailCursor - 14
-			}
-			endIdx := startIdx + 15
-			if endIdx > len(m.userRepos) {
-				endIdx = len(m.userRepos)
-			}
-
-			for i := startIdx; i < endIdx; i++ {
-				repo := m.userRepos[i]
-				name := repo.Name
-				if len(name) > 24 {
-					name = name[:21] + "..."
-				}
-				lang := repo.PrimaryLanguage
-				if lang == "" {
-					lang = "-"
-				}
-				if len(lang) > 9 {
-					lang = lang[:8] + "…"
-				}
-				line := fmt.Sprintf("%-26s %-10s %-6d %-6d %-7d %-10s", name, lang, repo.StargazerCount, repo.ForkCount, repo.CommitCount, repo.Visibility)
-				if i == m.userDetailCursor {
-					b.WriteString(SelectedStyle.Width(m.layout.InnerWidth).Render(line))
-				} else {
-					b.WriteString(NormalStyle.Render(line))
-				}
-				b.WriteString("\n")
-			}
+			b.WriteString(m.userReposTable.View())
 		}
 	} else if m.userDetailTab == 2 {
-		// Gists tab - show files
+		// Gists tab - use Bubbles table
 		if len(m.userGistFiles) == 0 {
 			b.WriteString(HintStyle.Render("No gist files found."))
 		} else {
-			// Show header with GUID and Count columns
-			b.WriteString(NormalStyle.Render(fmt.Sprintf("%-50s %-10s %-7s %-4s %-10s  %-32s  %-10s", "Filename", "Language", "Size", "Rev", "Updated", "GUID", "Count")))
-			b.WriteString("\n")
-			b.WriteString(strings.Repeat("─", m.layout.InnerWidth))
-			b.WriteString("\n")
-
-			// Show files (limited to 15 visible)
-			startIdx := 0
-			if m.userDetailCursor >= 15 {
-				startIdx = m.userDetailCursor - 14
-			}
-			endIdx := startIdx + 15
-			if endIdx > len(m.userGistFiles) {
-				endIdx = len(m.userGistFiles)
-			}
-
-			// Track gist info for the next file row
-			var pendingGistInfo *gistFileEntry
-
-			for i := startIdx; i < endIdx; i++ {
-				file := m.userGistFiles[i]
-
-				// Check if this is a divider row
-				if file.IsDivider {
-					// Store gist info to apply to the next file (first file in this gist)
-					pendingGistInfo = &file
-					continue
-				}
-
-				name := file.FileName
-				if len(name) > 50 {
-					name = name[:47] + "..."
-				}
-				lang := file.Language
-				if lang == "" {
-					lang = "-"
-				}
-				if len(lang) > 8 {
-					lang = lang[:8]
-				}
-				// Format size
-				sizeStr := fmt.Sprintf("%dB", file.Size)
-				if file.Size >= 1024 {
-					sizeStr = fmt.Sprintf("%.1fKB", float64(file.Size)/1024)
-				}
-
-				// If this is the first file in a gist, show gist info
-				var updated, guid, countLabel string
-				if pendingGistInfo != nil {
-					filesWord := "file"
-					if pendingGistInfo.FileCount != 1 {
-						filesWord = "files"
-					}
-					updated = pendingGistInfo.UpdatedAt
-					if len(updated) > 10 {
-						updated = updated[:10]
-					}
-					guid = pendingGistInfo.GistID
-					if len(guid) > 32 {
-						guid = guid[len(guid)-32:]
-					}
-					countLabel = fmt.Sprintf("%d %s", pendingGistInfo.FileCount, filesWord)
-					pendingGistInfo = nil // Clear it after using
-				}
-
-				line := fmt.Sprintf("%-50s %-10s %-7s %-4d %-10s  %-32s  %-10s", name, lang, sizeStr, file.RevisionCount, updated, guid, countLabel)
-				if i == m.userDetailCursor {
-					b.WriteString(SelectedStyle.Width(m.layout.InnerWidth).Render(line))
-				} else {
-					b.WriteString(NormalStyle.Render(line))
-				}
-				b.WriteString("\n")
-
-				// Add divider AFTER last file in gist if next item is a divider
-				isLastInView := (i == endIdx-1)
-				isLastInList := (i == len(m.userGistFiles)-1)
-				nextIsDivider := !isLastInList && i+1 < len(m.userGistFiles) && m.userGistFiles[i+1].IsDivider
-
-				if nextIsDivider && !isLastInView {
-					// Render divider to separate gist groups
-					dividerText := strings.Repeat("─", m.layout.InnerWidth)
-					b.WriteString(dividerText)
-					b.WriteString("\n")
-				}
-			}
+			b.WriteString(m.userGistsTable.View())
 		}
 	}
 
@@ -3122,8 +3226,14 @@ func (m TUIModel) renderMenu() string {
 		b.WriteString("\n")
 	}
 
-	// Add border around menu with width from layout (InnerWidth so total = ViewportWidth)
-	borderStyle := BorderStyle.Width(m.layout.InnerWidth).MarginTop(1)
+	// Calculate available height for border (viewport - top margin - footer - border overhead)
+	availableHeight := m.layout.ViewportHeight - 4
+	if availableHeight < 10 {
+		availableHeight = 10
+	}
+
+	// Add border around menu with width from layout (InnerWidth so total = ViewportWidth) and dynamic height
+	borderStyle := BorderStyle.Width(m.layout.InnerWidth).Height(availableHeight).MarginTop(1)
 
 	var result strings.Builder
 	result.WriteString(borderStyle.Render(b.String()))
@@ -3168,8 +3278,14 @@ func (m TUIModel) renderDomainConfig() string {
 		b.WriteString("_")
 	}
 
-	// Add border around config screen with width from layout (InnerWidth so total = ViewportWidth)
-	borderStyle := BorderStyle.Width(m.layout.InnerWidth).MarginTop(1)
+	// Calculate available height for border (viewport - top margin - footer - border overhead)
+	availableHeight := m.layout.ViewportHeight - 4
+	if availableHeight < 10 {
+		availableHeight = 10
+	}
+
+	// Add border around config screen with width from layout (InnerWidth so total = ViewportWidth) and dynamic height
+	borderStyle := BorderStyle.Width(m.layout.InnerWidth).Height(availableHeight).MarginTop(1)
 
 	var result strings.Builder
 	result.WriteString(borderStyle.Render(b.String()))
@@ -3202,8 +3318,14 @@ func (m TUIModel) renderSearchPicker() string {
 		b.WriteString("\n")
 	}
 
-	// Add border around picker with width from layout (InnerWidth so total = ViewportWidth)
-	borderStyle := BorderStyle.Width(m.layout.InnerWidth).MarginTop(1)
+	// Calculate available height for border (viewport - top margin - footer - border overhead)
+	availableHeight := m.layout.ViewportHeight - 4
+	if availableHeight < 10 {
+		availableHeight = 10
+	}
+
+	// Add border around picker with width from layout (InnerWidth so total = ViewportWidth) and dynamic height
+	borderStyle := BorderStyle.Width(m.layout.InnerWidth).Height(availableHeight).MarginTop(1)
 
 	var result strings.Builder
 	result.WriteString(borderStyle.Render(b.String()))
@@ -3232,8 +3354,14 @@ func (m TUIModel) renderLocalSearchInput() string {
 	b.WriteString(NormalStyle.Render(m.localSearchKeyword))
 	b.WriteString(AccentStyle.Render("_"))
 
-	// Add border around input with width from layout (InnerWidth so total = ViewportWidth)
-	borderStyle := BorderStyle.Width(m.layout.InnerWidth).MarginTop(1)
+	// Calculate available height for border (viewport - top margin - footer - border overhead)
+	availableHeight := m.layout.ViewportHeight - 4
+	if availableHeight < 10 {
+		availableHeight = 10
+	}
+
+	// Add border around input with width from layout (InnerWidth so total = ViewportWidth) and dynamic height
+	borderStyle := BorderStyle.Width(m.layout.InnerWidth).Height(availableHeight).MarginTop(1)
 
 	var result strings.Builder
 	result.WriteString(borderStyle.Render(b.String()))

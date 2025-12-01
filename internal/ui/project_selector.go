@@ -142,17 +142,14 @@ func (m ProjectSelectorModel) View() string {
 		return ""
 	}
 
-	var b strings.Builder
+	// Calculate layout dimensions
+	layout := NewLayout(m.width, m.height)
 
-	// Calculate inner width for content (border width - 3)
-	innerWidth := m.width - 3
-	if innerWidth < 40 {
-		innerWidth = 40
-	}
+	var b strings.Builder
 
 	b.WriteString(TitleStyle.Render("Select Project"))
 	b.WriteString("\n")
-	b.WriteString(strings.Repeat("─", innerWidth))
+	b.WriteString(strings.Repeat("─", layout.InnerWidth))
 	b.WriteString("\n\n")
 
 	if m.createMode {
@@ -169,15 +166,10 @@ func (m ProjectSelectorModel) View() string {
 			for i, proj := range m.projects {
 				// Display project name without .db extension
 				displayName := strings.TrimSuffix(proj, filepath.Ext(proj))
-				line := displayName
 				if i == m.cursor {
-					padding := innerWidth - len(line)
-					if padding > 0 {
-						line = line + strings.Repeat(" ", padding)
-					}
-					b.WriteString(SelectedStyle.Render(line))
+					b.WriteString(SelectedStyle.Width(layout.InnerWidth).Render(displayName))
 				} else {
-					b.WriteString(NormalStyle.Render(line))
+					b.WriteString(NormalStyle.Render(displayName))
 				}
 				b.WriteString("\n")
 			}
@@ -185,38 +177,39 @@ func (m ProjectSelectorModel) View() string {
 		}
 
 		// Create New option
-		createLine := "Create New Project"
 		if m.cursor == len(m.projects) {
-			padding := innerWidth - len(createLine)
-			if padding > 0 {
-				createLine = createLine + strings.Repeat(" ", padding)
-			}
-			b.WriteString(SelectedStyle.Render(createLine))
+			b.WriteString(SelectedStyle.Width(layout.InnerWidth).Render("Create New Project"))
 		} else {
-			b.WriteString(NormalStyle.Render(createLine))
+			b.WriteString(NormalStyle.Render("Create New Project"))
 		}
 		b.WriteString("\n")
 
 		// Exit option
-		exitLine := "Exit"
 		if m.cursor == len(m.projects)+1 {
-			padding := innerWidth - len(exitLine)
-			if padding > 0 {
-				exitLine = exitLine + strings.Repeat(" ", padding)
-			}
-			b.WriteString(SelectedStyle.Render(exitLine))
+			b.WriteString(SelectedStyle.Width(layout.InnerWidth).Render("Exit"))
 		} else {
-			b.WriteString(NormalStyle.Render(exitLine))
+			b.WriteString(NormalStyle.Render("Exit"))
 		}
 		b.WriteString("\n")
 	}
 
-	// Use centralized border style with dynamic width from terminal
-	borderStyle := BorderStyle.Width(m.width - 2)
+	// Pad content to fill available height (account for border and help line)
+	content := b.String()
+	contentLines := strings.Count(content, "\n")
+	availableHeight := m.height - 4 // -2 for border top/bottom, -1 for help, -1 for margin
+	if contentLines < availableHeight {
+		content += strings.Repeat("\n", availableHeight-contentLines)
+	}
 
-	// Build final view with border and help text below
+	// Apply border with full width and height
+	borderedContent := BorderStyle.
+		Width(layout.InnerWidth).
+		Height(availableHeight).
+		Render(content)
+
+	// Build final view with help text below
 	var result strings.Builder
-	result.WriteString(borderStyle.Render(b.String()))
+	result.WriteString(borderedContent)
 
 	// Add help text outside the border (only in select mode)
 	if !m.createMode {

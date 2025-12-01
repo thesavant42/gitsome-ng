@@ -552,3 +552,36 @@ ORDER BY layer_index ASC
 const updateLayerDownloaded = `
 UPDATE layer_inspections SET downloaded = TRUE, download_path = ? WHERE image_ref = ? AND layer_digest = ?
 `
+
+// Schema for image manifests (stores build steps and other image metadata)
+const createImageManifestsTable = `
+CREATE TABLE IF NOT EXISTS image_manifests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    image_ref TEXT NOT NULL UNIQUE,
+    platform TEXT,
+    build_steps TEXT,
+    config_digest TEXT,
+    layer_count INTEGER,
+    total_size INTEGER,
+    fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_image_manifests_ref ON image_manifests(image_ref);
+`
+
+// SQL queries for image manifests
+const insertImageManifest = `
+INSERT OR REPLACE INTO image_manifests (
+    image_ref, platform, build_steps, config_digest, layer_count, total_size, fetched_at
+) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+`
+
+const selectImageManifest = `
+SELECT id, image_ref, platform, build_steps, config_digest, layer_count, total_size, fetched_at
+FROM image_manifests
+WHERE image_ref = ?
+`
+
+const selectImageManifestBuildSteps = `
+SELECT build_steps FROM image_manifests WHERE image_ref = ?
+`
