@@ -157,9 +157,10 @@ type TUIModel struct {
 	switchProject bool // true when user wants to switch to a different project
 
 	// Docker Hub search state
-	launchDockerSearch       bool // true when user wants to launch Docker Hub search
-	launchCachedLayers       bool // true when user wants to browse cached layers
-	launchSearchCachedLayers bool // true when user wants to search cached layers
+	launchDockerSearch       bool   // true when user wants to launch Docker Hub search
+	launchDockerSearchQuery  string // username to pre-fill in Docker Hub search
+	launchCachedLayers       bool   // true when user wants to browse cached layers
+	launchSearchCachedLayers bool   // true when user wants to search cached layers
 
 	// Export state
 	dbPath        string // path to current database for backup export
@@ -2027,10 +2028,13 @@ func (m *TUIModel) rebuildTable() {
 		Bold(true).
 		Foreground(ColorText)
 
+	// CRITICAL: Do NOT set Background here - renderTableWithLinks() handles
+	// full-width selection background. Setting it here embeds ANSI codes that prevent
+	// the outer style's Width() from extending the background to full width.
 	s.Selected = s.Selected.
 		Foreground(ColorText).
-		Background(ColorHighlight).
-		Bold(true)
+		Background(lipgloss.NoColor{}).
+		Bold(false)
 
 	t.SetStyles(s)
 
@@ -2168,6 +2172,15 @@ func (m TUIModel) handleUserDetailView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Tab 0: Profile - open selected row's URL
 		if m.userDetailTab == 0 && m.userDetailCursor < len(m.userProfileRows) {
 			row := m.userProfileRows[m.userDetailCursor]
+
+			// Check if Docker Hub row - redirect to search instead of browser
+			if row.Label == "Docker Hub:" && row.DisplayValue != "" {
+				m.launchDockerSearch = true
+				m.launchDockerSearchQuery = row.DisplayValue
+				return m, tea.Quit
+			}
+
+			// Other clickable rows still open in browser
 			if row.IsClickable && row.URL != "" {
 				openURL(row.URL)
 			}
@@ -3322,6 +3335,9 @@ func (m TUIModel) renderUserDetail() string {
 	} else if m.userDetailTab == 1 {
 		// Repos tab - use Bubbles table with full-width selection and divider
 		if len(m.userRepos) == 0 {
+			// Add divider for consistency with table view (matches renderBubblesTableWithFullWidth pattern)
+			b.WriteString(strings.Repeat("─", m.layout.InnerWidth))
+			b.WriteString("\n")
 			b.WriteString(HintStyle.Render("No repositories found."))
 		} else {
 			b.WriteString(m.renderBubblesTableWithFullWidth(m.userReposTable))
@@ -3329,6 +3345,9 @@ func (m TUIModel) renderUserDetail() string {
 	} else if m.userDetailTab == 2 {
 		// Gists tab - use Bubbles table with full-width selection and divider
 		if len(m.userGistFiles) == 0 {
+			// Add divider for consistency with table view (matches renderBubblesTableWithFullWidth pattern)
+			b.WriteString(strings.Repeat("─", m.layout.InnerWidth))
+			b.WriteString("\n")
 			b.WriteString(HintStyle.Render("No gist files found."))
 		} else {
 			b.WriteString(m.renderBubblesTableWithFullWidth(m.userGistsTable))
@@ -3629,8 +3648,11 @@ func (m TUIModel) renderTableWithLinks() string {
 		dataRowIndex = i - 2
 
 		// Selector bar - use InnerWidth for full width
+		// CRITICAL: Strip ANSI codes first to prevent embedded reset codes from killing the background
+		// This matches the pattern used in renderBubblesTableWithFullWidth()
 		if dataRowIndex == cursor {
-			result = append(result, SelectedStyle.Width(m.layout.InnerWidth).Render(line))
+			cleanLine := stripANSI(line)
+			result = append(result, SelectedStyle.Width(m.layout.InnerWidth).Render(cleanLine))
 			continue
 		}
 
@@ -3645,10 +3667,12 @@ func (m TUIModel) renderTableWithLinks() string {
 		// Check if pending (yellow background)
 		// NOTE: lipgloss used ONLY for colorizing existing row text, not building structure
 		if pendingEmails[email] {
+			cleanLine := stripANSI(line)
 			style := lipgloss.NewStyle().
 				Foreground(ColorBlack).
-				Background(ColorAccentDim)
-			result = append(result, style.Render(line))
+				Background(ColorAccentDim).
+				Width(m.layout.InnerWidth)
+			result = append(result, style.Render(cleanLine))
 			continue
 		}
 
@@ -3777,6 +3801,7 @@ func RunMultiRepoTUI(
 			LaunchDockerSearch:       m.launchDockerSearch,
 			LaunchCachedLayers:       m.launchCachedLayers,
 			LaunchSearchCachedLayers: m.launchSearchCachedLayers,
+			DockerSearchQuery:        m.launchDockerSearchQuery,
 		}, nil
 	}
 	return TUIResult{}, nil
@@ -3788,6 +3813,7 @@ type TUIResult struct {
 	LaunchDockerSearch       bool
 	LaunchCachedLayers       bool
 	LaunchSearchCachedLayers bool
+	DockerSearchQuery        string // pre-filled query for Docker Hub search
 }
 
 // formatProviderName converts provider names to display format

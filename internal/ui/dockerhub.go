@@ -15,24 +15,26 @@ import (
 
 // DockerHubSearchModel is the TUI model for Docker Hub search
 type DockerHubSearchModel struct {
-	client          *api.DockerHubClient
-	logger          *log.Logger
-	database        *db.DB
-	layout          Layout
-	table           table.Model
-	textInput       textinput.Model
-	spinner         spinner.Model
-	results         *api.DockerHubSearchResponse
-	query           string
-	page            int
-	searching       bool
-	inputMode       bool
-	err             error
-	quitting        bool
-	returnToMain    bool
-	launchInspector bool           // true when user wants to inspect an image
-	selectedImage   string         // image name to inspect
-	cachedImages    map[string]int // image name -> layer count (from DB)
+	client            *api.DockerHubClient
+	logger            *log.Logger
+	database          *db.DB
+	layout            Layout
+	table             table.Model
+	textInput         textinput.Model
+	spinner           spinner.Model
+	results           *api.DockerHubSearchResponse
+	query             string
+	page              int
+	searching         bool
+	inputMode         bool
+	err               error
+	quitting          bool
+	returnToMain      bool
+	launchInspector   bool           // true when user wants to inspect an image
+	selectedImage     string         // image name to inspect
+	cachedImages      map[string]int // image name -> layer count (from DB)
+	pendingSearch     bool           // true when initial search should be triggered on Init
+	layoutInitialized bool           // true after first WindowSizeMsg received
 }
 
 // DockerHubSearchMsg is sent when search results are ready
@@ -85,6 +87,8 @@ func NewDockerHubSearchModel(logger *log.Logger, database *db.DB) DockerHubSearc
 
 // Init implements tea.Model
 func (m DockerHubSearchModel) Init() tea.Cmd {
+	// Don't trigger pendingSearch here - wait for WindowSizeMsg first
+	// so that layout is properly initialized with correct terminal dimensions
 	return tea.Batch(textinput.Blink, m.spinner.Tick)
 }
 
@@ -102,6 +106,14 @@ func (m DockerHubSearchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.results != nil {
 			m.updateTable()
 		}
+
+		// Trigger pending search after layout is initialized with correct dimensions
+		if m.pendingSearch && !m.layoutInitialized {
+			m.layoutInitialized = true
+			m.pendingSearch = false // Clear flag so it doesn't re-trigger
+			return m, m.doSearch()
+		}
+		m.layoutInitialized = true
 		return m, nil
 
 	case spinner.TickMsg:
@@ -428,23 +440,35 @@ func (m DockerHubSearchModel) SelectedImage() string {
 }
 
 // RunDockerHubSearch starts the Docker Hub search TUI
-func RunDockerHubSearch(logger *log.Logger, database *db.DB) error {
+// initialQuery can be provided to pre-fill the search and trigger an immediate search (e.g., from DockerHub profile redirect)
+func RunDockerHubSearch(logger *log.Logger, database *db.DB, initialQuery string) error {
 	// Keep track of the last search state to restore after inspector
 	var lastQuery string
 	var lastResults *api.DockerHubSearchResponse
 	var lastPage int
+	// Track if this is the first iteration (for initial query)
+	firstIteration := true
 
 	for {
 		model := NewDockerHubSearchModel(logger, database)
 
-		// Restore previous search state if we have it
-		if lastQuery != "" && lastResults != nil {
+		// Pre-fill query if provided on first iteration (e.g., from DockerHub profile redirect)
+		if firstIteration && initialQuery != "" {
+			model.textInput.SetValue(initialQuery)
+			model.query = initialQuery
+			model.inputMode = false    // Don't show input mode, show search results
+			model.searching = true     // Set searching state
+			model.pendingSearch = true // Trigger search on Init
+			firstIteration = false
+		} else if lastQuery != "" && lastResults != nil {
+			// Restore previous search state if we have it (after inspector returns)
 			model.query = lastQuery
 			model.results = lastResults
 			model.page = lastPage
 			model.inputMode = false // Start in table mode with results
 			model.updateTable()     // Rebuild table rows from restored results
 		}
+		firstIteration = false
 
 		p := tea.NewProgram(model, tea.WithAltScreen())
 

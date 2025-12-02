@@ -18,4 +18,5 @@ __pycache__/
 *.txt
 /Employee Interests and Connections.pdf
 /bugs
-/testing-fixtures
+*.tar.gz
+testing-fixtures/

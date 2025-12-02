@@ -91,6 +91,52 @@ func (n *fsNode) getSortedChildren() []*fsNode {
 }
 
 // =============================================================================
+// Shared Table Rendering Helper
+// =============================================================================
+
+// renderTableWithFullWidthSelection renders a bubbles table with full-width selection highlight.
+// The table's Selected style should use Background(lipgloss.NoColor{}) to prevent ANSI embedding,
+// and this function applies the visible selection styling.
+// This matches the pattern used in tui.go's renderBubblesTableWithFullWidth().
+func renderTableWithFullWidthSelection(t table.Model, layout Layout) string {
+	tableOutput := t.View()
+	lines := strings.Split(tableOutput, "\n")
+	var result []string
+
+	cursor := t.Cursor()
+
+	for i, line := range lines {
+		// Header row - apply full width for consistent rendering
+		if i == 0 {
+			result = append(result, NormalStyle.Width(layout.InnerWidth).Render(line))
+			continue
+		}
+
+		// Divider line (line 1) - use InnerWidth for full width
+		if i == 1 {
+			result = append(result, strings.Repeat("─", layout.InnerWidth))
+			continue
+		}
+
+		// Data rows start at line 2, so dataRowIndex = i - 2
+		dataRowIndex := i - 2
+
+		// Apply full-width selection styling to the selected row
+		// Strip ANSI codes first to prevent embedded reset codes from killing the background
+		if dataRowIndex == cursor {
+			cleanLine := stripANSI(line)
+			result = append(result, SelectedStyle.Width(layout.InnerWidth).Render(cleanLine))
+			continue
+		}
+
+		// Non-selected data rows - apply normal text color with full width
+		result = append(result, NormalStyle.Width(layout.InnerWidth).Render(line))
+	}
+
+	return strings.Join(result, "\n")
+}
+
+// =============================================================================
 // Filesystem Browser Model (using bubbles/table)
 // =============================================================================
 
@@ -363,8 +409,8 @@ func (m fsBrowserModel) View() string {
 	contentBuilder.WriteString(StatsStyle.Render(fmt.Sprintf("%d items", len(m.rows)-1))) // -1 for ".."
 	contentBuilder.WriteString("\n\n")
 
-	// Table view
-	contentBuilder.WriteString(m.table.View())
+	// Table view with full-width selection
+	contentBuilder.WriteString(renderTableWithFullWidthSelection(m.table, m.layout))
 
 	// Show status message if present
 	if m.statusMsg != "" {
@@ -629,8 +675,8 @@ func (m layerSelectorModel) View() string {
 		contentBuilder.WriteString("_")
 		contentBuilder.WriteString("\n")
 	} else {
-		// Table view with scrolling
-		contentBuilder.WriteString(m.table.View())
+		// Table view with full-width selection
+		contentBuilder.WriteString(renderTableWithFullWidthSelection(m.table, m.layout))
 	}
 
 	// Calculate available height for border
@@ -1182,8 +1228,8 @@ func (m platformSelectorModel) View() string {
 	contentBuilder.WriteString(NormalStyle.Render(fmt.Sprintf("%d platforms available", len(m.platforms))))
 	contentBuilder.WriteString("\n\n")
 
-	// Table
-	contentBuilder.WriteString(m.table.View())
+	// Table with full-width selection
+	contentBuilder.WriteString(renderTableWithFullWidthSelection(m.table, m.layout))
 
 	// Calculate available height for border
 	// Account for: 1 top margin + 2 border lines + 1 line after border + 1 hint line = 5 lines overhead
@@ -1338,8 +1384,8 @@ func (m layerActionSelectorModel) View() string {
 	contentBuilder.WriteString(TitleStyle.Render(m.title))
 	contentBuilder.WriteString("\n\n")
 
-	// Table
-	contentBuilder.WriteString(m.table.View())
+	// Table with full-width selection
+	contentBuilder.WriteString(renderTableWithFullWidthSelection(m.table, m.layout))
 
 	// Calculate available height for border
 	// Account for: 1 top margin + 2 border lines + 1 line after border + 1 hint line = 5 lines overhead
@@ -1485,8 +1531,8 @@ func (m tagSelectorModel) View() string {
 	contentBuilder.WriteString(NormalStyle.Render(fmt.Sprintf("%d tags available", len(m.tags))))
 	contentBuilder.WriteString("\n\n")
 
-	// Table
-	contentBuilder.WriteString(m.table.View())
+	// Table with full-width selection
+	contentBuilder.WriteString(renderTableWithFullWidthSelection(m.table, m.layout))
 
 	// Calculate available height for border
 	// Account for: 1 top margin + 2 border lines + 1 line after border + 1 hint line = 5 lines overhead
@@ -1809,8 +1855,8 @@ func (m cachedImageTableModel) View() string {
 	contentBuilder.WriteString(NormalStyle.Render(fmt.Sprintf("%d images in cache", len(m.rows))))
 	contentBuilder.WriteString("\n\n")
 
-	// Table
-	contentBuilder.WriteString(m.table.View())
+	// Table with full-width selection
+	contentBuilder.WriteString(renderTableWithFullWidthSelection(m.table, m.layout))
 
 	// Border around content using InnerWidth - let content determine height naturally
 	// Border uses InnerWidth for content, total width = ViewportWidth
@@ -2006,8 +2052,8 @@ func (m layerTableModel) View() string {
 	contentBuilder.WriteString(strings.Repeat("─", m.layout.InnerWidth))
 	contentBuilder.WriteString("\n\n")
 
-	// Table (native selection styling works because columns fill full width)
-	contentBuilder.WriteString(m.table.View())
+	// Table with full-width selection
+	contentBuilder.WriteString(renderTableWithFullWidthSelection(m.table, m.layout))
 
 	// Calculate available height for border (Bug #8 fix - was missing height)
 	availableHeight := m.layout.ViewportHeight - 4

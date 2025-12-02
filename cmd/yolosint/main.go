@@ -145,7 +145,7 @@ func main() {
 
 				// If user wants to launch Docker Hub search
 				if result.LaunchDockerSearch {
-					if err := ui.RunDockerHubSearch(log.Default(), database); err != nil {
+					if err := ui.RunDockerHubSearch(log.Default(), database, result.DockerSearchQuery); err != nil {
 						ui.PrintError(fmt.Sprintf("Docker Hub search failed: %v", err))
 					}
 					continue // Return to main TUI after search
