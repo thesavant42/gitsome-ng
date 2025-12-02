@@ -1,5 +1,12 @@
 package ui
 
+// CRITICAL: Lipgloss is ONLY imported for styling (colors, borders).
+// NEVER use lipgloss for layout, table rows, or form fields.
+// See docs/LIPGLOSS_FORBIDDEN_PATTERNS.md for forbidden patterns.
+//
+// This file (styles.go) is the ONLY place where lipgloss styles should be defined.
+// All other files should import and USE these pre-defined styles, not create new ones.
+
 import (
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/table"

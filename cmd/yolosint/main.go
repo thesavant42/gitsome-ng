@@ -6,12 +6,12 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/charmbracelet/log"
+	"github.com/joho/godotenv"
 	"github.com/thesavant42/gitsome-ng/internal/api"
 	"github.com/thesavant42/gitsome-ng/internal/db"
 	"github.com/thesavant42/gitsome-ng/internal/models"
 	"github.com/thesavant42/gitsome-ng/internal/ui"
-
-	"github.com/joho/godotenv"
 )
 
 const (
@@ -21,7 +21,7 @@ const (
 func main() {
 	// Show splash screen on startup
 	ui.ShowSplash()
-	
+
 	// Load .env file if it exists (silently ignore if not found)
 	_ = godotenv.Load()
 
@@ -47,7 +47,7 @@ func main() {
 
 	// Determine database path
 	var selectedDBPath string
-	
+
 	if *dbPath != "" {
 		// Explicit --db flag bypasses project selector
 		selectedDBPath = *dbPath
@@ -61,7 +61,7 @@ func main() {
 			ui.PrintError(fmt.Sprintf("Project selector failed: %v", err))
 			os.Exit(1)
 		}
-		
+
 		switch result.Action {
 		case "exit":
 			return
@@ -113,7 +113,7 @@ func main() {
 			os.Exit(1)
 		}
 		ui.PrintSuccess(fmt.Sprintf("Added %s/%s to tracked repositories", owner, repo))
-		
+
 		// Optionally fetch commits for the new repo
 		fmt.Println()
 		fmt.Println("Fetching commits for the new repository...")
@@ -136,16 +136,16 @@ func main() {
 			// Check if we have tracked repos - if so, launch multi-repo TUI
 			trackedRepos, err := database.GetTrackedRepos()
 			if err == nil && len(trackedRepos) > 0 {
-			// Launch multi-repo TUI
+				// Launch multi-repo TUI
 				result, err := ui.RunMultiRepoTUI(trackedRepos, database, "Committers", token, selectedDBPath)
 				if err != nil {
 					ui.PrintError(fmt.Sprintf("Interactive mode failed: %v", err))
 					os.Exit(1)
 				}
-				
+
 				// If user wants to launch Docker Hub search
 				if result.LaunchDockerSearch {
-					if err := ui.RunDockerHubSearch(nil, database); err != nil {
+					if err := ui.RunDockerHubSearch(log.Default(), database); err != nil {
 						ui.PrintError(fmt.Sprintf("Docker Hub search failed: %v", err))
 					}
 					continue // Return to main TUI after search
@@ -166,30 +166,30 @@ func main() {
 					}
 					continue // Return to main TUI after search
 				}
-				
+
 				// If user wants to switch projects, close current db and show selector
 				if result.SwitchProject {
 					database.Close()
-					
+
 					// Clear screen before showing project selector
 					fmt.Print("\033[H\033[2J")
-					
+
 					result, err := ui.RunProjectSelector()
 					if err != nil {
 						ui.PrintError(fmt.Sprintf("Project selector failed: %v", err))
 						os.Exit(1)
 					}
-					
+
 					if result.Action == "exit" {
 						return
 					}
-					
+
 					selectedDBPath = result.ProjectPath
 					if result.Action == "create" {
 						fmt.Println()
 						ui.PrintSuccess(fmt.Sprintf("Creating new project: %s", selectedDBPath))
 					}
-					
+
 					// Reopen database with new path
 					database, err = db.New(selectedDBPath)
 					if err != nil {
@@ -272,7 +272,7 @@ func main() {
 			ui.PrintError(fmt.Sprintf("Interactive mode failed: %v", err))
 			os.Exit(1)
 		}
-		
+
 		// Single-repo mode doesn't support project switching, so exit
 		break
 	}
@@ -350,4 +350,3 @@ func loadFromFile(filePath string) ([]models.Commit, string, string, error) {
 
 	return commits, owner, repo, nil
 }
-

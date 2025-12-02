@@ -150,7 +150,8 @@ func (m *fsBrowserModel) initTable() {
 	tableRows := m.buildTableRows()
 
 	// Calculate column widths to fill InnerWidth for full-width selector highlighting
-	totalW := m.layout.InnerWidth - 2 // Small margin for visual comfort
+	// Use InnerWidth directly to ensure columns fill full content area
+	totalW := m.layout.InnerWidth
 	if totalW < 50 {
 		totalW = 50
 	}
@@ -217,7 +218,8 @@ func (m *fsBrowserModel) updateTableRows() {
 
 func (m *fsBrowserModel) rebuildTable() {
 	// Recalculate column widths to fill InnerWidth for full-width selector highlighting
-	totalW := m.layout.InnerWidth - 2 // Small margin for visual comfort
+	// Use InnerWidth directly to ensure columns fill full content area
+	totalW := m.layout.InnerWidth
 	if totalW < 50 {
 		totalW = 50
 	}
@@ -233,7 +235,7 @@ func (m *fsBrowserModel) rebuildTable() {
 }
 
 func (m fsBrowserModel) Init() tea.Cmd {
-	return tea.ClearScreen
+	return tea.Batch(tea.WindowSize(), tea.ClearScreen)
 }
 
 // downloadMsg is sent when a download completes
@@ -346,6 +348,9 @@ func (m fsBrowserModel) View() string {
 
 	// Title with layer info
 	contentBuilder.WriteString(TitleStyle.Render(m.layerInfo))
+	contentBuilder.WriteString("\n")
+	// White divider after title
+	contentBuilder.WriteString(strings.Repeat("─", m.layout.InnerWidth))
 	contentBuilder.WriteString("\n\n")
 
 	// Current path
@@ -417,7 +422,8 @@ func newLayerSelectorModel(imageRef string, layers []api.Layer, buildSteps []str
 	layout := DefaultLayout()
 
 	// Calculate column widths to fill InnerWidth for full-width selector highlighting
-	totalW := layout.InnerWidth - 2 // Small margin for visual comfort
+	// Use InnerWidth directly to ensure columns fill full content area
+	totalW := layout.InnerWidth
 	if totalW < 50 {
 		totalW = 50
 	}
@@ -462,6 +468,9 @@ func newLayerSelectorModel(imageRef string, layers []api.Layer, buildSteps []str
 	// Apply standard table styles for consistent look
 	ApplyTableStyles(&t)
 
+	// Ensure cursor starts at the top (first row) for proper viewport positioning
+	t.GotoTop()
+
 	return layerSelectorModel{
 		table:      t,
 		imageRef:   imageRef,
@@ -474,7 +483,8 @@ func newLayerSelectorModel(imageRef string, layers []api.Layer, buildSteps []str
 
 func (m *layerSelectorModel) updateTableSize() {
 	// Recalculate column widths to fill InnerWidth for full-width selector highlighting
-	totalW := m.layout.InnerWidth - 2 // Small margin for visual comfort
+	// Use InnerWidth directly to ensure columns fill full content area
+	totalW := m.layout.InnerWidth
 	if totalW < 50 {
 		totalW = 50
 	}
@@ -598,21 +608,15 @@ func (m layerSelectorModel) View() string {
 			if len(displayStep) > maxLineWidth {
 				displayStep = displayStep[:maxLineWidth-3] + "..."
 			}
-			contentBuilder.WriteString(fmt.Sprintf(" [%d] %s\n", i, DimStyle.Render(displayStep)))
+			// Use NormalStyle (white text) instead of DimStyle
+			contentBuilder.WriteString(fmt.Sprintf(" [%d] %s\n", i, NormalStyle.Render(displayStep)))
 		}
 		if len(m.buildSteps) > maxSteps {
-			contentBuilder.WriteString(DimStyle.Render(fmt.Sprintf(" ... and %d more steps\n", len(m.buildSteps)-maxSteps)))
+			// Use NormalStyle (white text) instead of DimStyle
+			contentBuilder.WriteString(NormalStyle.Render(fmt.Sprintf(" ... and %d more steps\n", len(m.buildSteps)-maxSteps)))
 		}
 		contentBuilder.WriteString("\n")
 	}
-
-	// Divider using InnerWidth - 2 to match content area inside border
-	dividerWidth := m.layout.InnerWidth - 2
-	if dividerWidth < 20 {
-		dividerWidth = 20
-	}
-	contentBuilder.WriteString(strings.Repeat("─", dividerWidth))
-	contentBuilder.WriteString("\n\n")
 
 	// Layers section
 	contentBuilder.WriteString(NormalStyle.Bold(true).Render("Layers:"))
@@ -1705,7 +1709,7 @@ func newCachedImageTableModel(rows []db.CachedImageRow) cachedImageTableModel {
 	layout := DefaultLayout()
 
 	// Use InnerWidth for full-width selector highlighting
-	totalW := layout.InnerWidth - 2 // Small margin for visual comfort
+	totalW := layout.InnerWidth
 	if totalW < 40 {
 		totalW = 40
 	}
@@ -1773,7 +1777,7 @@ func (m cachedImageTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *cachedImageTableModel) updateTableSize() {
 	// Use InnerWidth for full-width selector highlighting
-	totalW := m.layout.InnerWidth - 2 // Small margin for visual comfort
+	totalW := m.layout.InnerWidth
 	if totalW < 40 {
 		totalW = 40
 	}
@@ -1799,27 +1803,23 @@ func (m cachedImageTableModel) View() string {
 	// Title
 	contentBuilder.WriteString(TitleStyle.Render("Cached Layer Inspections"))
 	contentBuilder.WriteString("\n")
+	// White divider after title
+	contentBuilder.WriteString(strings.Repeat("─", m.layout.InnerWidth))
+	contentBuilder.WriteString("\n")
 	contentBuilder.WriteString(NormalStyle.Render(fmt.Sprintf("%d images in cache", len(m.rows))))
 	contentBuilder.WriteString("\n\n")
 
 	// Table
 	contentBuilder.WriteString(m.table.View())
 
-	// Calculate available height for border
-	// Account for: 1 top margin + 2 border lines + 1 line after border + 1 hint line = 5 lines overhead
-	availableHeight := m.layout.ViewportHeight - 5
-	if availableHeight < 10 {
-		availableHeight = 10
-	}
-
-	// Border around content using InnerWidth
+	// Border around content using InnerWidth - let content determine height naturally
+	// Border uses InnerWidth for content, total width = ViewportWidth
 	borderedContent := BorderStyle.
 		Width(m.layout.InnerWidth).
-		Height(availableHeight).
 		Render(contentBuilder.String())
 
 	var result strings.Builder
-	result.WriteString("\n") // Top margin
+	result.WriteString("\n") // Top margin to avoid terminal edge
 	result.WriteString(borderedContent)
 	result.WriteString("\n")
 	result.WriteString(" " + HintStyle.Render("enter: select | q/esc: back"))
@@ -1880,7 +1880,7 @@ type layerTableModel struct {
 
 func (m *layerTableModel) updateTableSize() {
 	// Use InnerWidth for full-width selector highlighting
-	totalW := m.layout.InnerWidth - 2 // Small margin for visual comfort
+	totalW := m.layout.InnerWidth
 	if totalW < 50 {
 		totalW = 50
 	}
@@ -1906,7 +1906,7 @@ func newLayerTableModel(imageRef string, layers []db.LayerInspection) layerTable
 	layout := DefaultLayout()
 
 	// Use InnerWidth for full-width selector highlighting
-	totalW := layout.InnerWidth - 2 // Small margin for visual comfort
+	totalW := layout.InnerWidth
 	if totalW < 50 {
 		totalW = 50
 	}
@@ -2001,19 +2001,21 @@ func (m layerTableModel) View() string {
 
 	// Title
 	contentBuilder.WriteString(TitleStyle.Render(fmt.Sprintf("%s - Select Layer (%d cached)", m.imageRef, len(m.layers))))
+	contentBuilder.WriteString("\n")
+	// White divider after title (Bug #8 fix)
+	contentBuilder.WriteString(strings.Repeat("─", m.layout.InnerWidth))
 	contentBuilder.WriteString("\n\n")
 
 	// Table (native selection styling works because columns fill full width)
 	contentBuilder.WriteString(m.table.View())
 
-	// Calculate available height for border
-	// Account for: 1 top margin + 2 border lines + 1 line after border + 1 hint line = 5 lines overhead
-	availableHeight := m.layout.ViewportHeight - 5
+	// Calculate available height for border (Bug #8 fix - was missing height)
+	availableHeight := m.layout.ViewportHeight - 4
 	if availableHeight < 10 {
 		availableHeight = 10
 	}
 
-	// Border around content
+	// Border around content with BOTH width AND height (Bug #8 fix)
 	borderedContent := BorderStyle.
 		Width(m.layout.InnerWidth).
 		Height(availableHeight).
@@ -2246,17 +2248,9 @@ func (m searchModel) View() string {
 		}
 	}
 
-	// Calculate available height for border
-	// Account for: 1 top margin + 2 border lines + 1 line after border + 1 hint line = 5 lines overhead
-	availableHeight := m.layout.ViewportHeight - 5
-	if availableHeight < 10 {
-		availableHeight = 10
-	}
-
-	// Border around content using InnerWidth
+	// Border around content using InnerWidth - let content determine height naturally
 	borderedContent := BorderStyle.
 		Width(m.layout.InnerWidth).
-		Height(availableHeight).
 		Render(contentBuilder.String())
 
 	var result strings.Builder
@@ -2411,6 +2405,9 @@ func (m batchFetchModel) View() string {
 
 	// Title
 	contentBuilder.WriteString(TitleStyle.Render("Batch Layer Fetch"))
+	contentBuilder.WriteString("\n")
+	// White divider after title
+	contentBuilder.WriteString(strings.Repeat("─", m.layout.InnerWidth))
 	contentBuilder.WriteString("\n\n")
 
 	// Image reference
@@ -2421,10 +2418,10 @@ func (m batchFetchModel) View() string {
 	// Progress info
 	if m.done {
 		successCount := m.totalLayers - len(m.errors)
-		contentBuilder.WriteString(NormalStyle.Render(fmt.Sprintf("✓ Completed: %d/%d layers cached", successCount, m.totalLayers)))
+		contentBuilder.WriteString(NormalStyle.Render(fmt.Sprintf("Completed: %d/%d layers cached", successCount, m.totalLayers)))
 		contentBuilder.WriteString("\n")
 		if len(m.errors) > 0 {
-			contentBuilder.WriteString(NormalStyle.Render(fmt.Sprintf("✗ Failed: %d layers", len(m.errors))))
+			contentBuilder.WriteString(NormalStyle.Render(fmt.Sprintf("Failed: %d layers", len(m.errors))))
 			contentBuilder.WriteString("\n")
 		}
 	} else {
@@ -2439,14 +2436,13 @@ func (m batchFetchModel) View() string {
 		contentBuilder.WriteString("\n")
 	}
 
-	// Calculate available height for border
-	// Account for: 1 top margin + 2 border lines + 1 line after border + 1 hint line = 5 lines overhead
-	availableHeight := m.layout.ViewportHeight - 5
+	// Calculate available height for border (Bug #9 fix - was missing height)
+	availableHeight := m.layout.ViewportHeight - 4
 	if availableHeight < 10 {
 		availableHeight = 10
 	}
 
-	// Border around content
+	// Border around content with BOTH width AND height (Bug #9 fix)
 	borderedContent := BorderStyle.
 		Width(m.layout.InnerWidth).
 		Height(availableHeight).

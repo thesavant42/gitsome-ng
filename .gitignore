@@ -17,3 +17,5 @@ __pycache__/
 /Redboxquarter.ogg
 *.txt
 /Employee Interests and Connections.pdf
+/bugs
+/testing-fixtures

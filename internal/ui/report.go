@@ -7,17 +7,16 @@ import (
 	"github.com/thesavant42/gitsome-ng/internal/models"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/lipgloss/table"
 )
 
 var (
 	// Color palette
-	purple    = lipgloss.Color("99")  // for borders
-	pink      = lipgloss.Color("205") // for header text
-	cyan      = lipgloss.Color("86")
-	white     = lipgloss.Color("255")
-	green     = lipgloss.Color("82")
-	yellow    = lipgloss.Color("220")
+	purple = lipgloss.Color("99")  // for borders
+	pink   = lipgloss.Color("205") // for header text
+	cyan   = lipgloss.Color("86")
+	white  = lipgloss.Color("255")
+	green  = lipgloss.Color("82")
+	yellow = lipgloss.Color("220")
 
 	// Styles
 	titleStyle = lipgloss.NewStyle().
@@ -65,6 +64,13 @@ func PrintHeader(owner, repo string, totalCommits int) {
 }
 
 // PrintContributorTable prints a styled table of contributor statistics
+//
+// CORRECT LIPGLOSS USAGE: This is a CLI report (non-interactive), so we use manual
+// formatting with strings. Lipgloss is used ONLY for colors/styling the output text.
+// We DO NOT use lipgloss to build table structure - we use string formatting instead.
+//
+// For interactive TUI tables, use bubbles/table component (see internal/ui/tui.go).
+// See docs/LIPGLOSS_FORBIDDEN_PATTERNS.md for forbidden patterns.
 func PrintContributorTable(title string, stats []models.ContributorStats, highlight string) {
 	if len(stats) == 0 {
 		fmt.Println(subtitleStyle.Render(title + ": No data"))
@@ -74,11 +80,48 @@ func PrintContributorTable(title string, stats []models.ContributorStats, highli
 	// Print section title
 	fmt.Println(titleStyle.Render(title))
 
-	// Build table rows and track which rows should be highlighted
-	rows := make([][]string, len(stats))
+	// Track which rows should be highlighted
 	highlightRows := make(map[int]bool)
 	highlightLower := strings.ToLower(highlight)
 
+	for i, s := range stats {
+		// Check if this row should be highlighted (case-insensitive)
+		if highlight != "" {
+			rowText := strings.ToLower(s.Name + s.GitHubLogin + s.Email)
+			if strings.Contains(rowText, highlightLower) {
+				highlightRows[i] = true
+			}
+		}
+	}
+
+	// Calculate column widths
+	colWidths := []int{6, 20, 15, 25, 10, 8} // Rank, Name, Login, Email, Commits, %
+	totalWidth := 2                          // Start with left border
+	for _, w := range colWidths {
+		totalWidth += w + 3 // column width + " │ " separator
+	}
+	totalWidth -= 1 // Last column doesn't have trailing separator
+
+	// Build border line
+	separator := strings.Repeat("─", totalWidth-2) // -2 for corner chars
+
+	// Print top border
+	fmt.Println(borderStyle.Render("┌" + separator + "┐"))
+
+	// Print header
+	headerRow := fmt.Sprintf("│ %-*s │ %-*s │ %-*s │ %-*s │ %-*s │ %-*s │",
+		colWidths[0], "Rank",
+		colWidths[1], "Name",
+		colWidths[2], "GitHub Login",
+		colWidths[3], "Email",
+		colWidths[4], "Commits",
+		colWidths[5], "%")
+	fmt.Println(headerStyle.Render(headerRow))
+
+	// Print separator line
+	fmt.Println(borderStyle.Render("├" + separator + "┤"))
+
+	// Print rows
 	for i, s := range stats {
 		rank := fmt.Sprintf("%d", i+1)
 		name := s.Name
@@ -90,37 +133,37 @@ func PrintContributorTable(title string, stats []models.ContributorStats, highli
 		commits := fmt.Sprintf("%d", s.CommitCount)
 		pct := fmt.Sprintf("%.1f%%", s.Percentage)
 
-		rows[i] = []string{rank, name, login, email, commits, pct}
+		// Truncate long values
+		if len(name) > colWidths[1] {
+			name = name[:colWidths[1]-3] + "..."
+		}
+		if len(login) > colWidths[2] {
+			login = login[:colWidths[2]-3] + "..."
+		}
+		if len(email) > colWidths[3] {
+			email = email[:colWidths[3]-3] + "..."
+		}
 
-		// Check if this row should be highlighted (case-insensitive)
-		if highlight != "" {
-			rowText := strings.ToLower(name + login + email)
-			if strings.Contains(rowText, highlightLower) {
-				highlightRows[i] = true
-			}
+		rowText := fmt.Sprintf("│ %-*s │ %-*s │ %-*s │ %-*s │ %-*s │ %-*s │",
+			colWidths[0], rank,
+			colWidths[1], name,
+			colWidths[2], login,
+			colWidths[3], email,
+			colWidths[4], commits,
+			colWidths[5], pct)
+
+		// Apply styling based on highlight/row type
+		if highlightRows[i] {
+			fmt.Println(highlightStyle.Render(rowText))
+		} else if i%2 == 0 {
+			fmt.Println(evenRowStyle.Render(rowText))
+		} else {
+			fmt.Println(oddRowStyle.Render(rowText))
 		}
 	}
 
-	// Create styled table
-	t := table.New().
-		Border(lipgloss.RoundedBorder()).
-		BorderStyle(borderStyle).
-		StyleFunc(func(row, col int) lipgloss.Style {
-			switch {
-			case row == table.HeaderRow:
-				return headerStyle
-			case highlightRows[row]:
-				return highlightStyle
-			case row%2 == 0:
-				return evenRowStyle
-			default:
-				return oddRowStyle
-			}
-		}).
-		Headers("Rank", "Name", "GitHub Login", "Email", "Commits", "%").
-		Rows(rows...)
-
-	fmt.Println(t)
+	// Print bottom border
+	fmt.Println(borderStyle.Render("└" + separator + "┘"))
 	fmt.Println()
 }
 
@@ -210,4 +253,3 @@ func generateMarkdownTable(stats []models.ContributorStats) string {
 
 	return sb.String()
 }
-

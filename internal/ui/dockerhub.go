@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/log"
 	"github.com/thesavant42/gitsome-ng/internal/api"
 	"github.com/thesavant42/gitsome-ng/internal/db"
@@ -21,6 +21,7 @@ type DockerHubSearchModel struct {
 	layout          Layout
 	table           table.Model
 	textInput       textinput.Model
+	spinner         spinner.Model
 	results         *api.DockerHubSearchResponse
 	query           string
 	page            int
@@ -72,6 +73,9 @@ func NewDockerHubSearchModel(logger *log.Logger, database *db.DB) DockerHubSearc
 	// Apply standard table styles (same as layerslayer.go)
 	ApplyTableStyles(&t)
 
+	// Create red spinner for search operations
+	spinnerModel := NewAppSpinner()
+
 	return DockerHubSearchModel{
 		client:       api.NewDockerHubClient(logger),
 		logger:       logger,
@@ -79,6 +83,7 @@ func NewDockerHubSearchModel(logger *log.Logger, database *db.DB) DockerHubSearc
 		layout:       layout,
 		table:        t,
 		textInput:    ti,
+		spinner:      spinnerModel,
 		page:         1,
 		inputMode:    true,
 		cachedImages: make(map[string]int),
@@ -87,7 +92,7 @@ func NewDockerHubSearchModel(logger *log.Logger, database *db.DB) DockerHubSearc
 
 // Init implements tea.Model
 func (m DockerHubSearchModel) Init() tea.Cmd {
-	return textinput.Blink
+	return tea.Batch(textinput.Blink, m.spinner.Tick)
 }
 
 // Update implements tea.Model
@@ -96,12 +101,18 @@ func (m DockerHubSearchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.layout = NewLayout(msg.Width, msg.Height)
 		m.table.SetHeight(m.layout.TableHeight)
+		m.table.SetWidth(m.layout.InnerWidth) // Set table width for full-width selector
 		// Update text input width dynamically
 		m.textInput.Width = m.layout.InnerWidth - 10
 		if m.results != nil {
 			m.updateTable()
 		}
 		return m, nil
+
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
 
 	case DockerHubSearchMsg:
 		m.searching = false
@@ -199,14 +210,14 @@ func (m DockerHubSearchModel) View() string {
 		return ""
 	}
 
-	var b strings.Builder
-	b.WriteString("\n")
-
 	// Build content inside border
 	var contentBuilder strings.Builder
 
 	// Title
 	contentBuilder.WriteString(TitleStyle.Render("Docker Hub Search"))
+	contentBuilder.WriteString("\n")
+	// White divider after title
+	contentBuilder.WriteString(strings.Repeat("─", m.layout.InnerWidth))
 	contentBuilder.WriteString("\n\n")
 
 	// Search input or current query
@@ -221,11 +232,17 @@ func (m DockerHubSearchModel) View() string {
 		}
 		contentBuilder.WriteString(AccentStyle.Render(queryInfo))
 		contentBuilder.WriteString("\n\n")
+		// NOTE: No manual divider here - the bubbles/table header has BorderBottom(true)
+		// which renders its own divider line under the column headers
 
 		if m.searching {
-			contentBuilder.WriteString(HintStyle.Render(" Searching..."))
+			// Show red spinner when searching
+			contentBuilder.WriteString(m.spinner.View())
+			contentBuilder.WriteString(" ")
+			contentBuilder.WriteString(HintStyle.Render("Searching..."))
 		} else if m.err != nil {
-			contentBuilder.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render(fmt.Sprintf(" Error: %v", m.err)))
+			// Use predefined style instead of creating new one
+			contentBuilder.WriteString(StatusMsgStyle.Render(fmt.Sprintf(" Error: %v", m.err)))
 		} else {
 			// Render table directly (no custom styling - let bubbles handle it)
 			contentBuilder.WriteString(m.table.View())
@@ -238,22 +255,26 @@ func (m DockerHubSearchModel) View() string {
 		availableHeight = 10
 	}
 
-	// Wrap in bordered box - match tui.go pattern exactly with dynamic height
+	// Wrap in bordered box with BOTH width AND height (fixes Bug #5 - right side not visible)
+	// Border uses InnerWidth for content, total width = ViewportWidth
 	borderedContent := BorderStyle.
 		Width(m.layout.InnerWidth).
 		Height(availableHeight).
 		Render(contentBuilder.String())
-	b.WriteString(borderedContent)
-	b.WriteString("\n")
+
+	var result strings.Builder
+	result.WriteString("\n") // Top margin to avoid terminal edge (OUTSIDE border)
+	result.WriteString(borderedContent)
+	result.WriteString("\n")
 
 	// Help text OUTSIDE border (like main TUI footer)
 	if m.inputMode {
-		b.WriteString(" " + HintStyle.Render("Enter: search | Esc: back to main"))
+		result.WriteString(" " + HintStyle.Render("Enter: search | Esc: back to main"))
 	} else {
-		b.WriteString(" " + HintStyle.Render("Enter: inspect layers | /: new search | n/->: next | p/<-: prev | up/down: navigate | Esc: back"))
+		result.WriteString(" " + HintStyle.Render("Enter: inspect layers | /: new search | n/->: next | p/<-: prev | up/down: navigate | Esc: back"))
 	}
 
-	return b.String()
+	return result.String()
 }
 
 // doSearch performs the search asynchronously
@@ -293,9 +314,9 @@ func (m *DockerHubSearchModel) updateTable() {
 	}
 
 	// Calculate column widths to fill content area
-	// Content area inside border = InnerWidth - 2 (border padding, same as layerslayer.go)
-	// Bubbles table does NOT add gaps between columns - widths are exact
-	totalW := m.layout.InnerWidth - 2
+	// Use InnerWidth for full-width selector highlighting (matches tui.go pattern)
+	// Bubbles table column widths are exact - no separators added
+	totalW := m.layout.InnerWidth
 	if totalW < 50 {
 		totalW = 50
 	}
@@ -308,10 +329,23 @@ func (m *DockerHubSearchModel) updateTable() {
 	badgeW := 8
 	fixedTotal := nameW + publisherW + starsW + pullsW + badgeW // = 40
 
-	// Description gets remaining space
+	// Description gets remaining space - ensure columns sum exactly to totalW
 	descW := totalW - fixedTotal
 	if descW < 10 {
+		// If description too small, shrink other columns proportionally
 		descW = 10
+		shrink := fixedTotal + descW - totalW
+		// Shrink name column (largest flexible column)
+		if nameW > shrink {
+			nameW -= shrink
+		}
+	}
+
+	// Verify columns sum to totalW exactly
+	actualTotal := nameW + publisherW + starsW + pullsW + badgeW + descW
+	if actualTotal != totalW {
+		// Adjust description to make exact match
+		descW += (totalW - actualTotal)
 	}
 
 	// Helper to truncate string to width

@@ -454,8 +454,8 @@ func (m TUIModel) Init() tea.Cmd {
 
 // initUserReposTable initializes the repos table with dynamic column widths
 func (m *TUIModel) initUserReposTable() {
-	// Calculate column widths using TableWidth from Layout
-	totalW := m.layout.TableWidth
+	// Calculate column widths using InnerWidth for full-width selector highlighting
+	totalW := m.layout.InnerWidth
 	if totalW < 50 {
 		totalW = 50
 	}
@@ -469,6 +469,18 @@ func (m *TUIModel) initUserReposTable() {
 	nameW := totalW - langW - starsW - forksW - commitsW - visibilityW
 	if nameW < 15 {
 		nameW = 15
+		// Recalculate to ensure exact sum
+		actualTotal := nameW + langW + starsW + forksW + commitsW + visibilityW
+		if actualTotal != totalW {
+			// Adjust largest column to make exact match
+			visibilityW += (totalW - actualTotal)
+		}
+	}
+	// Verify columns sum to totalW exactly
+	actualTotal := nameW + langW + starsW + forksW + commitsW + visibilityW
+	if actualTotal != totalW {
+		// Adjust name column to make exact match
+		nameW += (totalW - actualTotal)
 	}
 
 	columns := []table.Column{
@@ -517,8 +529,8 @@ func (m *TUIModel) initUserReposTable() {
 
 // initUserGistsTable initializes the gists table with dynamic column widths
 func (m *TUIModel) initUserGistsTable() {
-	// Calculate column widths using TableWidth from Layout
-	totalW := m.layout.TableWidth
+	// Calculate column widths using InnerWidth for full-width selector highlighting
+	totalW := m.layout.InnerWidth
 	if totalW < 60 {
 		totalW = 60
 	}
@@ -533,6 +545,18 @@ func (m *TUIModel) initUserGistsTable() {
 	filenameW := totalW - langW - sizeW - revW - updatedW - guidW - countW
 	if filenameW < 20 {
 		filenameW = 20
+		// Recalculate to ensure exact sum
+		actualTotal := filenameW + langW + sizeW + revW + updatedW + guidW + countW
+		if actualTotal != totalW {
+			// Adjust largest column to make exact match
+			guidW += (totalW - actualTotal)
+		}
+	}
+	// Verify columns sum to totalW exactly
+	actualTotal := filenameW + langW + sizeW + revW + updatedW + guidW + countW
+	if actualTotal != totalW {
+		// Adjust filename column to make exact match
+		filenameW += (totalW - actualTotal)
 	}
 
 	columns := []table.Column{
@@ -2723,7 +2747,7 @@ func (m TUIModel) View() string {
 	// Add top margin to avoid terminal edge
 	b.WriteString("\n")
 
-	// Build content inside border: tabs + table
+	// Build content inside border: tabs + table ONLY (footer goes outside)
 	var contentBuilder strings.Builder
 
 	// Render page indicator (tabs) if multiple repos
@@ -2737,7 +2761,7 @@ func (m TUIModel) View() string {
 	tableView := m.renderTableWithLinks()
 	contentBuilder.WriteString(tableView)
 
-	// Add border around content (tabs + table)
+	// Add border around content (tabs + table ONLY - footer goes outside)
 	// Border.Width sets content width, so use InnerWidth to make total = ViewportWidth
 	borderedContent := BorderStyle.
 		Width(m.layout.InnerWidth).
@@ -2745,22 +2769,7 @@ func (m TUIModel) View() string {
 	b.WriteString(borderedContent)
 	b.WriteString("\n")
 
-	// Render progress bar if active
-	if m.showProgress {
-		// Render label above progress bar
-		if m.progressLabel != "" {
-			label := NormalStyle.Render(m.progressLabel)
-			b.WriteString(" " + label)
-			b.WriteString("\n")
-		}
-
-		// Render the progress bar
-		progressView := m.progressBar.ViewAs(m.progressPercent)
-		b.WriteString(" " + progressView)
-		b.WriteString("\n")
-	}
-
-	// Footer: stats on left, help in center, total commits on right
+	// Footer: help text and stats go OUTSIDE the border
 	if m.helpVisible {
 		// Two-column layout for keyboard controls
 		leftCol := []string{
@@ -2814,14 +2823,19 @@ func (m TUIModel) View() string {
 		helpBuilder.WriteString(" Tags: [ ]=untagged, [x]=tagged, [!]=scanned (press T to clear for re-scan)")
 
 		b.WriteString(NormalStyle.Render(helpBuilder.String()))
+		b.WriteString("\n")
 	} else {
-		// Build footer with three sections
+		// Build footer with hotkey labels and stats (OUTSIDE border)
 
-		leftPart := fmt.Sprintf("Total Committers: %d", len(m.stats))
+		// Line 1: Hotkey labels
+		hotkeyLabels := "(M)enu, (T)ag/Untag, Query (U)sers, (L)ink/(U)nlink Rows, e(X)port Report"
 		if len(m.pendingLinks) > 0 {
-			leftPart += fmt.Sprintf(" [SELECTING: %d rows]", len(m.pendingLinks))
+			hotkeyLabels += fmt.Sprintf(" [SELECTING: %d rows]", len(m.pendingLinks))
 		}
+		b.WriteString(" " + HintStyle.Render(hotkeyLabels))
+		b.WriteString("\n")
 
+		// Line 2: Combined stats on right, help text in center
 		centerPart := "Press ? for help, q to quit"
 		if m.cached {
 			centerPart += " | " + AccentStyle.Render("CACHED")
@@ -2830,28 +2844,42 @@ func (m TUIModel) View() string {
 			centerPart = AccentStyle.Render(m.exportMessage)
 		}
 
-		rightPart := fmt.Sprintf("Total Commits: %d", m.totalCommits)
+		rightPart := fmt.Sprintf("Total Commits/Committers: %d/%d", m.totalCommits, len(m.stats))
 
-		// Calculate spacing to fit within ViewportWidth
-		// The footer sits below the border, so it should match ViewportWidth
-		// Subtract 1 for the leading space
-		availableWidth := m.layout.ViewportWidth - 1
-		usedWidth := len(leftPart) + len(centerPart) + len(rightPart)
+		// Calculate spacing to fit within InnerWidth (content inside border)
+		// Use lipgloss.Width() for styled strings to get visible width
+		centerPartStyled := HintStyle.Render(centerPart)
+		rightPartStyled := StatsStyle.Render(rightPart)
+		availableWidth := m.layout.InnerWidth - 1 // Subtract 1 for leading space
+		usedWidth := lipgloss.Width(centerPartStyled) + lipgloss.Width(rightPartStyled)
 		remainingSpace := availableWidth - usedWidth
 		if remainingSpace < 4 {
 			remainingSpace = 4
 		}
-		leftSpacing := remainingSpace / 2
-		rightSpacing := remainingSpace - leftSpacing
+		centerSpacing := remainingSpace
 
 		// Build footer line - add leading padding to align with border left edge
-		footer := " " + StatsStyle.Render(leftPart) +
-			strings.Repeat(" ", leftSpacing) +
-			HintStyle.Render(centerPart) +
-			strings.Repeat(" ", rightSpacing) +
-			StatsStyle.Render(rightPart)
+		footer := " " + centerPartStyled +
+			strings.Repeat(" ", centerSpacing) +
+			rightPartStyled
 
 		b.WriteString(footer)
+		b.WriteString("\n")
+	}
+
+	// Render progress bar if active (outside border)
+	if m.showProgress {
+		// Render label above progress bar
+		if m.progressLabel != "" {
+			label := NormalStyle.Render(m.progressLabel)
+			b.WriteString(" " + label)
+			b.WriteString("\n")
+		}
+
+		// Render the progress bar
+		progressView := m.progressBar.ViewAs(m.progressPercent)
+		b.WriteString(" " + progressView)
+		b.WriteString("\n")
 	}
 
 	return b.String()
@@ -2863,15 +2891,9 @@ func (m TUIModel) renderPageIndicator() string {
 		return ""
 	}
 
-	activeStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(ColorText).
-		Background(ColorHighlight).
-		Padding(0, 1)
-
-	inactiveStyle := lipgloss.NewStyle().
-		Foreground(ColorText).
-		Padding(0, 1)
+	// Use predefined tab styles instead of creating new ones
+	activeStyle := TabActiveStyle
+	inactiveStyle := TabInactiveStyle
 
 	// Fixed width: InnerWidth = ViewportWidth - 2 (content inside border)
 	// Layout: < (1) + space (1) + [tabs] + [padding] + > (1) = InnerWidth
@@ -2900,13 +2922,11 @@ func (m TUIModel) renderPageIndicator() string {
 	}
 
 	// Render active tab first to ensure it fits (truncate if needed)
+	// Account for padding: TabActiveStyle has Padding(0, 2) = 4 chars total
 	activeLabel := labels[activeIdx]
-	if lipgloss.Width(activeStyle.Render(activeLabel)) > availableForTabs {
-		// Truncate to fit: reserve 4 for style padding, 3 for "..."
-		maxLen := availableForTabs - 4
-		if maxLen > 3 && len(activeLabel) > maxLen {
-			activeLabel = activeLabel[:maxLen-3] + "..."
-		}
+	maxLabelLen := availableForTabs - 4 // Reserve space for padding
+	if len(activeLabel) > maxLabelLen && maxLabelLen > 3 {
+		activeLabel = activeLabel[:maxLabelLen-3] + "..."
 	}
 
 	// Render tabs starting from active, expand both directions
@@ -2916,6 +2936,7 @@ func (m TUIModel) renderPageIndicator() string {
 	// Add active tab
 	activeRendered := activeStyle.Render(activeLabel)
 	parts = append(parts, activeRendered)
+	// Use lipgloss.Width() to get visible width (excludes ANSI codes)
 	usedWidth = lipgloss.Width(activeRendered)
 
 	// Try adding tabs to the left and right
@@ -2949,7 +2970,7 @@ func (m TUIModel) renderPageIndicator() string {
 
 	// Join tabs with spaces
 	tabsStr := strings.Join(parts, " ")
-	tabsWidth := lipgloss.Width(tabsStr)
+	tabsWidth := lipgloss.Width(tabsStr) // Use lipgloss.Width() to get visible width
 
 	// Calculate padding
 	padding := availableForTabs - tabsWidth
@@ -3020,13 +3041,28 @@ func (m TUIModel) renderFormOverlay(formView string, title string) string {
 	var b strings.Builder
 
 	b.WriteString(TitleStyle.Render(title))
+	b.WriteString("\n")
+	// White divider after title
+	b.WriteString(strings.Repeat("─", m.layout.InnerWidth))
 	b.WriteString("\n\n")
 	b.WriteString(formView)
 
-	// Add border with width from layout (InnerWidth so total = ViewportWidth)
-	borderStyle := BorderStyle.Width(m.layout.InnerWidth)
+	// Calculate available height for border (viewport - top margin - footer - border overhead)
+	availableHeight := m.layout.ViewportHeight - 4
+	if availableHeight < 10 {
+		availableHeight = 10
+	}
 
-	return borderStyle.Render(b.String())
+	// Add border with width from layout (InnerWidth so total = ViewportWidth) and dynamic height
+	borderStyle := BorderStyle.Width(m.layout.InnerWidth).Height(availableHeight).MarginTop(1)
+
+	var result strings.Builder
+	result.WriteString(borderStyle.Render(b.String()))
+	result.WriteString("\n")
+	// Help text outside border, using yellow HintStyle
+	result.WriteString(" " + HintStyle.Render("Enter: confirm | Esc: cancel"))
+
+	return result.String()
 }
 
 // renderFetchPrompt renders the fetch confirmation prompt
@@ -3079,10 +3115,37 @@ func (m TUIModel) renderQueryProgress() string {
 	// Add border with width from layout (InnerWidth so total = ViewportWidth)
 	borderStyle := BorderStyle.
 		Width(m.layout.InnerWidth).
-		Padding(1, 0).
 		MarginTop(1)
 
 	return borderStyle.Render(b.String())
+}
+
+// renderBubblesTableWithFullWidth renders a Bubbles table with full-width divider
+// This is needed because Bubbles table header border only spans column widths, not full width
+// Selection styling is handled by ApplyTableStyles() via Bubbles directly
+func (m TUIModel) renderBubblesTableWithFullWidth(t table.Model) string {
+	baseView := t.View()
+	lines := strings.Split(baseView, "\n")
+	var result []string
+
+	for i, line := range lines {
+		// Header row - render as-is
+		if i == 0 {
+			result = append(result, line)
+			continue
+		}
+
+		// Divider line (line 1) - use InnerWidth for full width
+		if i == 1 {
+			result = append(result, strings.Repeat("─", m.layout.InnerWidth))
+			continue
+		}
+
+		// All other rows rendered as-is (selection handled by Bubbles)
+		result = append(result, line)
+	}
+
+	return strings.Join(result, "\n")
 }
 
 // renderUserDetail renders the user detail view with repos and gists
@@ -3090,7 +3153,7 @@ func (m TUIModel) renderUserDetail() string {
 	var b strings.Builder
 
 	// User label and profile tab (tab 0) - all on same line
-	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(ColorText).Render("User: "))
+	b.WriteString(NormalStyle.Bold(true).Render("User: "))
 	userInfo := m.selectedUserLogin
 	if m.userDetailTab == 0 {
 		b.WriteString(TabActiveStyle.Render(userInfo))
@@ -3150,30 +3213,37 @@ func (m TUIModel) renderUserDetail() string {
 			b.WriteString("\n")
 		}
 	} else if m.userDetailTab == 1 {
-		// Repos tab - use Bubbles table
+		// Repos tab - use Bubbles table with full-width selection and divider
 		if len(m.userRepos) == 0 {
 			b.WriteString(HintStyle.Render("No repositories found."))
 		} else {
-			b.WriteString(m.userReposTable.View())
+			b.WriteString(m.renderBubblesTableWithFullWidth(m.userReposTable))
 		}
 	} else if m.userDetailTab == 2 {
-		// Gists tab - use Bubbles table
+		// Gists tab - use Bubbles table with full-width selection and divider
 		if len(m.userGistFiles) == 0 {
 			b.WriteString(HintStyle.Render("No gist files found."))
 		} else {
-			b.WriteString(m.userGistsTable.View())
+			b.WriteString(m.renderBubblesTableWithFullWidth(m.userGistsTable))
 		}
 	}
 
-	// Add border with width from layout (InnerWidth so total = ViewportWidth)
-	borderStyle := BorderStyle.
+	// Calculate available height for border (Bug #14 fix - was missing height)
+	availableHeight := m.layout.ViewportHeight - 4
+	if availableHeight < 10 {
+		availableHeight = 10
+	}
+
+	// Add border with BOTH width AND height (Bug #14 fix - now supports resize)
+	borderedContent := BorderStyle.
 		Width(m.layout.InnerWidth).
-		Padding(1, 0).
-		MarginTop(1)
+		Height(availableHeight).
+		Render(b.String())
 
 	// Build final view with border and help text below
 	var result strings.Builder
-	result.WriteString(borderStyle.Render(b.String()))
+	result.WriteString("\n") // Top margin to avoid terminal edge
+	result.WriteString(borderedContent)
 	result.WriteString("\n")
 	result.WriteString(" " + HintStyle.Render("left/right: switch tabs | up/down: navigate | Enter: open in browser | p: profile | Esc: back"))
 
@@ -3215,6 +3285,9 @@ func (m TUIModel) renderMenu() string {
 	menuNormalStyle := NormalStyle.Width(m.layout.InnerWidth)
 
 	b.WriteString(TitleStyle.Render("Menu"))
+	b.WriteString("\n")
+	// White divider after title
+	b.WriteString(strings.Repeat("─", m.layout.InnerWidth))
 	b.WriteString("\n\n")
 
 	for i, option := range menuOptions {
@@ -3303,10 +3376,14 @@ func (m TUIModel) renderDomainConfig() string {
 func (m TUIModel) renderSearchPicker() string {
 	var b strings.Builder
 
-	menuSelectedStyle := SelectedStyle.Padding(0, 1)
-	menuNormalStyle := NormalStyle.Padding(0, 1)
+	// Use predefined styles without padding - Bubble Tea handles spacing
+	menuSelectedStyle := SelectedStyle.Width(m.layout.InnerWidth)
+	menuNormalStyle := NormalStyle.Width(m.layout.InnerWidth)
 
 	b.WriteString(TitleStyle.Render("Search"))
+	b.WriteString("\n")
+	// White divider after title (Bug #10 fix)
+	b.WriteString(strings.Repeat("─", m.layout.InnerWidth))
 	b.WriteString("\n\n")
 
 	for i, option := range searchOptions {
@@ -3344,6 +3421,9 @@ func (m TUIModel) renderLocalSearchInput() string {
 	var b strings.Builder
 
 	b.WriteString(TitleStyle.Render("Local Keyword Search"))
+	b.WriteString("\n")
+	// White divider after title
+	b.WriteString(strings.Repeat("─", m.layout.InnerWidth))
 	b.WriteString("\n\n")
 
 	b.WriteString(NormalStyle.Render("Search bio, repos, gists for keyword:"))
@@ -3397,8 +3477,14 @@ func extractEmailFromRow(line string) string {
 
 // renderTableWithLinks renders the table with colored rows for linked groups
 // STYLE GUIDE: All dividers and selectors use m.layout.InnerWidth for edge-to-edge rendering
+//
+// CORRECT LIPGLOSS USAGE: This function uses lipgloss ONLY for styling (applying colors).
+// The table structure comes from Bubbles (m.table.View()).
+// We then colorize individual rows based on their state (selected, linked, pending).
+// This is the CORRECT pattern: Bubbles for structure, lipgloss for styling.
+// See docs/LIPGLOSS_FORBIDDEN_PATTERNS.md - DO NOT use this as a template for building tables.
 func (m TUIModel) renderTableWithLinks() string {
-	// Get the base table view
+	// Get the base table view from Bubbles (structure comes from Bubbles, not lipgloss)
 	baseView := m.table.View()
 
 	// Build pending emails set for quick lookup (convert indices to emails)
@@ -3426,18 +3512,18 @@ func (m TUIModel) renderTableWithLinks() string {
 			continue
 		}
 
-		// Divider line - ViewportWidth minus 2 for border chars
+		// Divider line - use InnerWidth for full width
 		if i == 1 {
-			result = append(result, strings.Repeat("─", m.layout.ViewportWidth-2))
+			result = append(result, strings.Repeat("─", m.layout.InnerWidth))
 			continue
 		}
 
 		// For data rows (i >= 2), calculate the actual data index
 		dataRowIndex = i - 2
 
-		// Selector bar - ViewportWidth minus 2 for border chars
+		// Selector bar - use InnerWidth for full width
 		if dataRowIndex == cursor {
-			result = append(result, SelectedStyle.Width(m.layout.ViewportWidth-2).Render(line))
+			result = append(result, SelectedStyle.Width(m.layout.InnerWidth).Render(line))
 			continue
 		}
 
@@ -3450,6 +3536,7 @@ func (m TUIModel) renderTableWithLinks() string {
 		}
 
 		// Check if pending (yellow background)
+		// NOTE: lipgloss used ONLY for colorizing existing row text, not building structure
 		if pendingEmails[email] {
 			style := lipgloss.NewStyle().
 				Foreground(ColorBlack).
@@ -3459,6 +3546,7 @@ func (m TUIModel) renderTableWithLinks() string {
 		}
 
 		// Check if linked (colored text) - links have highest priority
+		// NOTE: lipgloss used ONLY for colorizing existing row text
 		if groupID, ok := m.links[email]; ok {
 			colorIdx := (groupID - 1) % len(linkColors)
 			color := linkColors[colorIdx]
@@ -3468,6 +3556,7 @@ func (m TUIModel) renderTableWithLinks() string {
 		}
 
 		// Check if email domain matches a highlight domain
+		// NOTE: lipgloss used ONLY for colorizing existing row text
 		domain := extractDomain(email)
 		if _, ok := m.highlightDomains[domain]; ok {
 			style := lipgloss.NewStyle().Foreground(ColorAccent)
@@ -3476,6 +3565,7 @@ func (m TUIModel) renderTableWithLinks() string {
 		}
 
 		// Apply bright white to non-highlighted rows
+		// NOTE: lipgloss used ONLY for colorizing existing row text
 		style := lipgloss.NewStyle().Foreground(ColorText)
 		result = append(result, style.Render(line))
 	}
