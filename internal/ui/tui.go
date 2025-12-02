@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strings"
 
@@ -16,6 +17,14 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 )
+
+// ANSI escape code regex for stripping embedded colors from Bubbles table output
+var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+
+// stripANSI removes all ANSI escape codes from a string
+func stripANSI(s string) string {
+	return ansiRegex.ReplaceAllString(s, "")
+}
 
 // Message types for async operations
 
@@ -452,47 +461,83 @@ func (m TUIModel) Init() tea.Cmd {
 	return tea.ClearScreen
 }
 
-// initUserReposTable initializes the repos table with dynamic column widths
-func (m *TUIModel) initUserReposTable() {
-	// Calculate column widths using InnerWidth for full-width selector highlighting
-	totalW := m.layout.InnerWidth
+// calculateUserReposColumns calculates column widths to fill the given width
+// This ensures the selector highlight spans the full width
+// The last column (Commits) is computed as a REMAINDER to guarantee exact sum
+func calculateUserReposColumns(totalW int) []table.Column {
 	if totalW < 50 {
 		totalW = 50
 	}
 
-	// Column widths: Name (variable), Lang (10), Stars (6), Forks (6), Commits (8), Visibility (10)
-	langW := 10
-	starsW := 6
-	forksW := 6
-	commitsW := 8
+	// Fixed column widths - keep visibility wide enough for "PRIVATE" (7 chars)
 	visibilityW := 10
-	nameW := totalW - langW - starsW - forksW - commitsW - visibilityW
-	if nameW < 15 {
-		nameW = 15
-		// Recalculate to ensure exact sum
-		actualTotal := nameW + langW + starsW + forksW + commitsW + visibilityW
-		if actualTotal != totalW {
-			// Adjust largest column to make exact match
-			visibilityW += (totalW - actualTotal)
-		}
-	}
-	// Verify columns sum to totalW exactly
-	actualTotal := nameW + langW + starsW + forksW + commitsW + visibilityW
-	if actualTotal != totalW {
-		// Adjust name column to make exact match
-		nameW += (totalW - actualTotal)
+	langW := 10 // Languages like "TypeScript" need more room
+	starsW := 7
+	forksW := 7
+
+	// Name column bounds
+	maxNameW := 35
+	minNameW := 15
+	minCommitsW := 8
+
+	// Calculate available space for Name (before commitsW is determined)
+	fixedExceptNameAndCommits := visibilityW + langW + starsW + forksW // = 34
+	availableForNameAndCommits := totalW - fixedExceptNameAndCommits
+
+	// Determine name width
+	nameW := availableForNameAndCommits - minCommitsW // Start by giving minimum to commits
+
+	// Handle case where name would be too large
+	if nameW > maxNameW {
+		nameW = maxNameW
 	}
 
-	columns := []table.Column{
+	// Handle narrow terminals - shrink other columns if needed
+	if nameW < minNameW {
+		deficit := minNameW - nameW
+		nameW = minNameW
+
+		// Shrink lang column first (most flexible after name)
+		if deficit > 0 && langW > 5 {
+			shrink := deficit
+			if shrink > langW-5 {
+				shrink = langW - 5
+			}
+			langW -= shrink
+		}
+	}
+
+	// CRITICAL: Compute commitsW as REMAINDER to guarantee exact sum
+	// This makes it mathematically impossible for the columns to not sum to totalW
+	commitsW := totalW - nameW - visibilityW - langW - starsW - forksW
+
+	// Safety check - commitsW must be at least 1
+	if commitsW < 1 {
+		// Emergency: steal from name to ensure commitsW >= 1
+		nameW -= (1 - commitsW)
+		commitsW = 1
+	}
+
+	return []table.Column{
 		{Title: "Name", Width: nameW},
+		{Title: "Visibility", Width: visibilityW},
 		{Title: "Lang", Width: langW},
 		{Title: "Stars", Width: starsW},
 		{Title: "Forks", Width: forksW},
 		{Title: "Commits", Width: commitsW},
-		{Title: "Visibility", Width: visibilityW},
 	}
+}
 
-	// Build table rows
+// initUserReposTable initializes the repos table with dynamic column widths
+func (m *TUIModel) initUserReposTable() {
+	// Get columns from central calculation function
+	columns := calculateUserReposColumns(m.layout.InnerWidth)
+
+	// Extract widths for truncation
+	nameW := columns[0].Width
+	langW := columns[2].Width
+
+	// Build table rows - column order: Name, Visibility, Lang, Stars, Forks, Commits
 	rows := make([]table.Row, len(m.userRepos))
 	for i, repo := range m.userRepos {
 		name := repo.Name
@@ -508,11 +553,11 @@ func (m *TUIModel) initUserReposTable() {
 		}
 		rows[i] = table.Row{
 			name,
+			repo.Visibility,
 			lang,
 			fmt.Sprintf("%d", repo.StargazerCount),
 			fmt.Sprintf("%d", repo.ForkCount),
 			fmt.Sprintf("%d", repo.CommitCount),
-			repo.Visibility,
 		}
 	}
 
@@ -527,47 +572,93 @@ func (m *TUIModel) initUserReposTable() {
 	m.userReposTable = t
 }
 
-// initUserGistsTable initializes the gists table with dynamic column widths
-func (m *TUIModel) initUserGistsTable() {
-	// Calculate column widths using InnerWidth for full-width selector highlighting
-	totalW := m.layout.InnerWidth
-	if totalW < 60 {
-		totalW = 60
+// calculateUserGistsColumns calculates column widths to fill the given width
+// This ensures the selector highlight spans the full width
+// The last column (Count) is computed as a REMAINDER to guarantee exact sum
+func calculateUserGistsColumns(totalW int) []table.Column {
+	if totalW < 50 {
+		totalW = 50
 	}
 
-	// Column widths: Filename (variable), Lang (10), Size (8), Rev (4), Updated (10), GUID (12), Count (8)
-	langW := 10
-	sizeW := 8
+	// Fixed column widths - keep compact for gists
+	langW := 8
+	sizeW := 6
 	revW := 4
 	updatedW := 10
-	guidW := 12
-	countW := 8
-	filenameW := totalW - langW - sizeW - revW - updatedW - guidW - countW
-	if filenameW < 20 {
-		filenameW = 20
-		// Recalculate to ensure exact sum
-		actualTotal := filenameW + langW + sizeW + revW + updatedW + guidW + countW
-		if actualTotal != totalW {
-			// Adjust largest column to make exact match
-			guidW += (totalW - actualTotal)
-		}
-	}
-	// Verify columns sum to totalW exactly
-	actualTotal := filenameW + langW + sizeW + revW + updatedW + guidW + countW
-	if actualTotal != totalW {
-		// Adjust filename column to make exact match
-		filenameW += (totalW - actualTotal)
+	guidW := 10
+
+	// Filename column bounds
+	maxFilenameW := 35
+	minFilenameW := 15
+	minCountW := 6
+
+	// Calculate available space for Filename (before countW is determined)
+	fixedExceptFilenameAndCount := langW + sizeW + revW + updatedW + guidW // = 38
+	availableForFilenameAndCount := totalW - fixedExceptFilenameAndCount
+
+	// Determine filename width
+	filenameW := availableForFilenameAndCount - minCountW // Start by giving minimum to count
+
+	// Handle case where filename would be too large
+	if filenameW > maxFilenameW {
+		filenameW = maxFilenameW
 	}
 
-	columns := []table.Column{
+	// Handle narrow terminals - shrink other columns if needed
+	if filenameW < minFilenameW {
+		deficit := minFilenameW - filenameW
+		filenameW = minFilenameW
+
+		// Shrink GUID column first (least important)
+		if deficit > 0 && guidW > 4 {
+			shrink := deficit
+			if shrink > guidW-4 {
+				shrink = guidW - 4
+			}
+			guidW -= shrink
+			deficit -= shrink
+		}
+
+		// If still need to shrink, take from langW
+		if deficit > 0 && langW > 4 {
+			shrink := deficit
+			if shrink > langW-4 {
+				shrink = langW - 4
+			}
+			langW -= shrink
+		}
+	}
+
+	// CRITICAL: Compute countW as REMAINDER to guarantee exact sum
+	// This makes it mathematically impossible for the columns to not sum to totalW
+	countW := totalW - filenameW - langW - sizeW - revW - updatedW - guidW
+
+	// Safety check - countW must be at least 1
+	if countW < 1 {
+		// Emergency: steal from filename to ensure countW >= 1
+		filenameW -= (1 - countW)
+		countW = 1
+	}
+
+	return []table.Column{
 		{Title: "Filename", Width: filenameW},
-		{Title: "Language", Width: langW},
+		{Title: "Lang", Width: langW},
 		{Title: "Size", Width: sizeW},
 		{Title: "Rev", Width: revW},
 		{Title: "Updated", Width: updatedW},
 		{Title: "GUID", Width: guidW},
 		{Title: "Count", Width: countW},
 	}
+}
+
+// initUserGistsTable initializes the gists table with dynamic column widths
+func (m *TUIModel) initUserGistsTable() {
+	// Get columns from central calculation function
+	columns := calculateUserGistsColumns(m.layout.InnerWidth)
+
+	// Extract widths for truncation
+	filenameW := columns[0].Width
+	langW := columns[1].Width
 
 	// Build table rows - skip dividers and show file data with gist info
 	var rows []table.Row
@@ -586,14 +677,14 @@ func (m *TUIModel) initUserGistsTable() {
 		}
 
 		name := file.FileName
-		if len(name) > filenameW-2 {
+		if len(name) > filenameW-2 && filenameW > 5 {
 			name = name[:filenameW-5] + "..."
 		}
 		lang := file.Language
 		if lang == "" {
 			lang = "-"
 		}
-		if len(lang) > langW-1 {
+		if len(lang) > langW-1 && langW > 3 {
 			lang = lang[:langW-2] + "…"
 		}
 
@@ -604,6 +695,7 @@ func (m *TUIModel) initUserGistsTable() {
 		}
 
 		// Show gist info on first file of each gist
+		guidW := columns[5].Width
 		var updated, guid, countLabel string
 		if pendingGistInfo != nil {
 			updated = pendingGistInfo.UpdatedAt
@@ -611,8 +703,9 @@ func (m *TUIModel) initUserGistsTable() {
 				updated = updated[:10]
 			}
 			guid = pendingGistInfo.GistID
-			if len(guid) > 12 {
-				guid = guid[len(guid)-12:]
+			// Truncate GUID to fit column width
+			if len(guid) > guidW && guidW > 3 {
+				guid = guid[len(guid)-(guidW-1):]
 			}
 			countLabel = fmt.Sprintf("%d", pendingGistInfo.FileCount)
 			pendingGistInfo = nil
@@ -3120,18 +3213,21 @@ func (m TUIModel) renderQueryProgress() string {
 	return borderStyle.Render(b.String())
 }
 
-// renderBubblesTableWithFullWidth renders a Bubbles table with full-width divider
+// renderBubblesTableWithFullWidth renders a Bubbles table with full-width divider and selection
 // This is needed because Bubbles table header border only spans column widths, not full width
-// Selection styling is handled by ApplyTableStyles() via Bubbles directly
+// Selection styling is applied manually to ensure full-width selector bar
 func (m TUIModel) renderBubblesTableWithFullWidth(t table.Model) string {
 	baseView := t.View()
 	lines := strings.Split(baseView, "\n")
 	var result []string
 
+	// Get current cursor position for full-width selection
+	cursor := t.Cursor()
+
 	for i, line := range lines {
-		// Header row - render as-is
+		// Header row - apply full width for consistent rendering
 		if i == 0 {
-			result = append(result, line)
+			result = append(result, NormalStyle.Width(m.layout.InnerWidth).Render(line))
 			continue
 		}
 
@@ -3141,8 +3237,19 @@ func (m TUIModel) renderBubblesTableWithFullWidth(t table.Model) string {
 			continue
 		}
 
-		// All other rows rendered as-is (selection handled by Bubbles)
-		result = append(result, line)
+		// Data rows start at line 2, so dataRowIndex = i - 2
+		dataRowIndex := i - 2
+
+		// Apply full-width selection styling to the selected row
+		// Strip ANSI codes first to prevent embedded reset codes from killing the background
+		if dataRowIndex == cursor {
+			cleanLine := stripANSI(line)
+			result = append(result, SelectedStyle.Width(m.layout.InnerWidth).Render(cleanLine))
+			continue
+		}
+
+		// Non-selected data rows - apply normal text color with full width
+		result = append(result, NormalStyle.Width(m.layout.InnerWidth).Render(line))
 	}
 
 	return strings.Join(result, "\n")

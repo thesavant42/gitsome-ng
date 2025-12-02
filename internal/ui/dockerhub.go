@@ -53,15 +53,8 @@ func NewDockerHubSearchModel(logger *log.Logger, database *db.DB) DockerHubSearc
 	// Calculate layout
 	layout := DefaultLayout()
 
-	// Create table with initial columns
-	columns := []table.Column{
-		{Title: "Name"},
-		{Title: "Publisher"},
-		{Title: "Stars"},
-		{Title: "Pulls"},
-		{Title: "Badge"},
-		{Title: "Description"},
-	}
+	// Calculate initial column widths to fill InnerWidth for full-width selector
+	columns := calculateDockerHubColumns(layout.InnerWidth)
 
 	t := table.New(
 		table.WithColumns(columns),
@@ -101,9 +94,11 @@ func (m DockerHubSearchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.layout = NewLayout(msg.Width, msg.Height)
 		m.table.SetHeight(m.layout.TableHeight)
-		m.table.SetWidth(m.layout.InnerWidth) // Set table width for full-width selector
 		// Update text input width dynamically
 		m.textInput.Width = m.layout.InnerWidth - 10
+		// Always update column widths on resize (for full-width selector highlighting)
+		columns := calculateDockerHubColumns(m.layout.InnerWidth)
+		m.table.SetColumns(columns)
 		if m.results != nil {
 			m.updateTable()
 		}
@@ -285,38 +280,9 @@ func (m DockerHubSearchModel) doSearch() tea.Cmd {
 	}
 }
 
-// updateTable updates the table with search results
-func (m *DockerHubSearchModel) updateTable() {
-	if m.results == nil {
-		return
-	}
-
-	// Check which images we have cached layer data for
-	m.cachedImages = make(map[string]int)
-	if m.database != nil {
-		for _, r := range m.results.Results {
-			// Check all possible tag variants (we store with tag in image_ref)
-			inspections, err := m.database.GetLayerInspectionsByImage(r.Name + ":latest")
-			if err == nil && len(inspections) > 0 {
-				m.cachedImages[r.Name] = len(inspections)
-			} else {
-				// Also check without tag (partial match would need different query)
-				// For now, check common tags
-				for _, tag := range []string{"1", "latest", "main", "master"} {
-					inspections, err := m.database.GetLayerInspectionsByImage(r.Name + ":" + tag)
-					if err == nil && len(inspections) > 0 {
-						m.cachedImages[r.Name] = len(inspections)
-						break
-					}
-				}
-			}
-		}
-	}
-
-	// Calculate column widths to fill content area
-	// Use InnerWidth for full-width selector highlighting (matches tui.go pattern)
-	// Bubbles table column widths are exact - no separators added
-	totalW := m.layout.InnerWidth
+// calculateDockerHubColumns calculates column widths to fill the given width
+// This ensures the selector highlight spans the full width
+func calculateDockerHubColumns(totalW int) []table.Column {
 	if totalW < 50 {
 		totalW = 50
 	}
@@ -347,6 +313,55 @@ func (m *DockerHubSearchModel) updateTable() {
 		// Adjust description to make exact match
 		descW += (totalW - actualTotal)
 	}
+
+	return []table.Column{
+		{Title: "Name", Width: nameW},
+		{Title: "Publisher", Width: publisherW},
+		{Title: "Stars", Width: starsW},
+		{Title: "Pulls", Width: pullsW},
+		{Title: "Badge", Width: badgeW},
+		{Title: "Description", Width: descW},
+	}
+}
+
+// updateTable updates the table with search results
+func (m *DockerHubSearchModel) updateTable() {
+	if m.results == nil {
+		return
+	}
+
+	// Check which images we have cached layer data for
+	m.cachedImages = make(map[string]int)
+	if m.database != nil {
+		for _, r := range m.results.Results {
+			// Check all possible tag variants (we store with tag in image_ref)
+			inspections, err := m.database.GetLayerInspectionsByImage(r.Name + ":latest")
+			if err == nil && len(inspections) > 0 {
+				m.cachedImages[r.Name] = len(inspections)
+			} else {
+				// Also check without tag (partial match would need different query)
+				// For now, check common tags
+				for _, tag := range []string{"1", "latest", "main", "master"} {
+					inspections, err := m.database.GetLayerInspectionsByImage(r.Name + ":" + tag)
+					if err == nil && len(inspections) > 0 {
+						m.cachedImages[r.Name] = len(inspections)
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// Get column widths from central calculation function
+	columns := calculateDockerHubColumns(m.layout.InnerWidth)
+
+	// Extract widths for truncation
+	nameW := columns[0].Width
+	publisherW := columns[1].Width
+	starsW := columns[2].Width
+	pullsW := columns[3].Width
+	badgeW := columns[4].Width
+	descW := columns[5].Width
 
 	// Helper to truncate string to width
 	truncate := func(s string, w int) string {
@@ -392,15 +407,7 @@ func (m *DockerHubSearchModel) updateTable() {
 		}
 	}
 
-	// Set columns with calculated widths
-	columns := []table.Column{
-		{Title: "Name", Width: nameW},
-		{Title: "Publisher", Width: publisherW},
-		{Title: "Stars", Width: starsW},
-		{Title: "Pulls", Width: pullsW},
-		{Title: "Badge", Width: badgeW},
-		{Title: "Description", Width: descW},
-	}
+	// Set columns and rows
 	m.table.SetColumns(columns)
 	m.table.SetRows(rows)
 }

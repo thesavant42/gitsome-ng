@@ -244,6 +244,10 @@ func BorderedBoxDefault() lipgloss.Style {
 
 // ApplyTableStyles applies the app's standard styling to a table
 // This centralizes table styling so we don't use lipgloss directly in other files
+// NOTE: This function does NOT apply selection background because tables using this
+// are rendered via renderBubblesTableWithFullWidth() which manually applies full-width
+// selection styling. Applying background here would embed ANSI codes that prevent
+// the full-width background from working correctly.
 func ApplyTableStyles(t *table.Model) {
 	s := table.DefaultStyles()
 	s.Header = s.Header.
@@ -252,11 +256,17 @@ func ApplyTableStyles(t *table.Model) {
 		BorderBottom(true).
 		Bold(true).
 		Foreground(ColorText)
+	// CRITICAL: Do NOT set Background here - renderBubblesTableWithFullWidth() handles
+	// full-width selection background. Setting it here embeds ANSI codes that prevent
+	// the outer style's Width() from extending the background to full width.
 	s.Selected = s.Selected.
 		Foreground(ColorText).
-		Background(ColorHighlight).
+		Background(lipgloss.NoColor{}).
 		Bold(true)
-	s.Cell = s.Cell.Foreground(ColorText)
+	// CRITICAL: Clear default cell padding to ensure column widths match InnerWidth exactly
+	// Bubbles table DefaultStyles() has Padding(0, 1) which adds 2 chars per cell,
+	// causing row width to exceed InnerWidth and truncate the selection bar
+	s.Cell = s.Cell.Foreground(ColorText).Padding(0)
 	t.SetStyles(s)
 }
 
