@@ -1,4 +1,7 @@
+
 # yolosint
+
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/thesavant42/gitsome-ng)
 
 GitHub commit analyzer with an interactive TUI for tracking committers across multiple repositories.
 
@@ -113,3 +116,4 @@ See [STYLE_GUIDE.md](STYLE_GUIDE.md) for complete details, examples, and the aud
 ## License
 
 See LICENSE file for details.
+
