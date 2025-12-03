@@ -112,6 +112,18 @@ func New(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("failed to create image manifests schema: %w", err)
 	}
 
+	// Initialize wayback records table (Wayback Machine CDX records)
+	if _, err := conn.Exec(createWaybackRecordsTable); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to create wayback records schema: %w", err)
+	}
+
+	// Initialize wayback fetch state table (for resume support)
+	if _, err := conn.Exec(createWaybackFetchStateTable); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to create wayback fetch state schema: %w", err)
+	}
+
 	// Run migrations to add new columns to existing tables
 	// These will silently fail if columns already exist
 	migrations := []string{

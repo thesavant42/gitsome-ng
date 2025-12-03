@@ -14,10 +14,10 @@ import (
 )
 
 const (
-	registryBaseURL = "https://registry-1.docker.io/v2"
-	authURL         = "https://auth.docker.io/token"
-	registryService = "registry.docker.io"
-	manifestAccept  = "application/vnd.docker.distribution.manifest.v2+json"
+	registryBaseURL    = "https://registry-1.docker.io/v2"
+	authURL            = "https://auth.docker.io/token"
+	registryService    = "registry.docker.io"
+	manifestAccept     = "application/vnd.docker.distribution.manifest.v2+json"
 	manifestListAccept = "application/vnd.docker.distribution.manifest.list.v2+json"
 )
 
@@ -34,7 +34,7 @@ type Manifest struct {
 	MediaType string
 	Config    BlobRef
 	Layers    []Layer
-	Platforms []Platform // populated if manifest list
+	Platforms []Platform       // populated if manifest list
 	V1History []V1HistoryEntry // populated for v1 manifests
 }
 
@@ -185,10 +185,10 @@ func registryURL(user, repo string) string {
 
 // doRequest performs an HTTP request with auth handling
 func (c *RegistryClient) doRequest(req *http.Request) (*http.Response, error) {
-	// Set accept header for manifests - request v2 manifest (like Python version)
-	// The registry will return a manifest list if the image is multi-arch
+	// Set accept header for manifests - request both v2 manifest and manifest list
+	// Docker registry uses content negotiation to return appropriate type
 	if strings.Contains(req.URL.Path, "/manifests/") {
-		req.Header.Set("Accept", manifestAccept)
+		req.Header.Set("Accept", manifestAccept+", "+manifestListAccept)
 	}
 
 	// Add auth if we have a token
@@ -546,4 +546,3 @@ func HumanReadableSize(size int64) string {
 	}
 	return fmt.Sprintf("%.1f %cB", float64(size)/float64(div), "KMGTPE"[exp])
 }
-

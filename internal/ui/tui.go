@@ -70,6 +70,7 @@ var menuOptions = []string{
 	"Docker Hub Search",
 	"Browse Cached Layers",
 	"Search Cached Layers",
+	"Wayback Machine",
 	"Switch Project",
 	"Export Tab to Markdown",
 	"Export Database Backup",
@@ -161,6 +162,7 @@ type TUIModel struct {
 	launchDockerSearchQuery  string // username to pre-fill in Docker Hub search
 	launchCachedLayers       bool   // true when user wants to browse cached layers
 	launchSearchCachedLayers bool   // true when user wants to search cached layers
+	launchWayback            bool   // true when user wants to launch Wayback Machine browser
 
 	// Export state
 	dbPath        string // path to current database for backup export
@@ -1448,11 +1450,15 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.menuVisible = false
 			m.launchSearchCachedLayers = true
 			return m, tea.Quit
-		case 7: // Switch Project
+		case 7: // Wayback Machine
+			m.menuVisible = false
+			m.launchWayback = true
+			return m, tea.Quit
+		case 8: // Switch Project
 			m.menuVisible = false
 			m.switchProject = true
 			return m, tea.Quit
-		case 8: // Export Tab to Markdown
+		case 9: // Export Tab to Markdown
 			m.menuVisible = false
 			filename, err := ExportTabToMarkdown(m.stats, m.repoOwner, m.repoName, m.totalCommits, m.showCombined)
 			if err != nil {
@@ -1460,7 +1466,7 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.exportMessage = fmt.Sprintf("Exported to %s", filename)
 			}
-		case 9: // Export Database Backup
+		case 10: // Export Database Backup
 			m.menuVisible = false
 			if m.dbPath != "" {
 				filename, err := ExportDatabaseBackup(m.dbPath)
@@ -1472,7 +1478,7 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.exportMessage = "Database path not available"
 			}
-		case 10: // Export Project Report
+		case 11: // Export Project Report
 			m.menuVisible = false
 			if m.database != nil {
 				filename, err := ExportProjectReport(m.database, m.dbPath)
@@ -2116,9 +2122,12 @@ func (m TUIModel) handleUserDetailView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.userDetailTab = (m.userDetailTab + 1) % 3
 		m.userDetailCursor = 0
 		// Reset table cursors when switching tabs
-		if m.userDetailTab == 1 && len(m.userRepos) > 0 {
-			m.userReposTable.SetCursor(0)
-		} else if m.userDetailTab == 2 {
+		switch m.userDetailTab {
+		case 1:
+			if len(m.userRepos) > 0 {
+				m.userReposTable.SetCursor(0)
+			}
+		case 2:
 			m.userGistsTable.SetCursor(0)
 		}
 		return m, nil
@@ -2128,23 +2137,29 @@ func (m TUIModel) handleUserDetailView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.userDetailTab = (m.userDetailTab + 2) % 3
 		m.userDetailCursor = 0
 		// Reset table cursors when switching tabs
-		if m.userDetailTab == 1 && len(m.userRepos) > 0 {
-			m.userReposTable.SetCursor(0)
-		} else if m.userDetailTab == 2 {
+		switch m.userDetailTab {
+		case 1:
+			if len(m.userRepos) > 0 {
+				m.userReposTable.SetCursor(0)
+			}
+		case 2:
 			m.userGistsTable.SetCursor(0)
 		}
 		return m, nil
 
 	case "up", "k":
 		// Tab 0 = Profile (manual), Tab 1 = Repos (table), Tab 2 = Gists (table)
-		if m.userDetailTab == 0 && m.userDetailCursor > 0 {
-			// Navigate profile rows manually
-			m.userDetailCursor--
-		} else if m.userDetailTab == 1 {
+		switch m.userDetailTab {
+		case 0:
+			if m.userDetailCursor > 0 {
+				// Navigate profile rows manually
+				m.userDetailCursor--
+			}
+		case 1:
 			// Let table handle navigation
 			m.userReposTable, cmd = m.userReposTable.Update(msg)
 			return m, cmd
-		} else if m.userDetailTab == 2 {
+		case 2:
 			// Let table handle navigation
 			m.userGistsTable, cmd = m.userGistsTable.Update(msg)
 			return m, cmd
@@ -2152,16 +2167,17 @@ func (m TUIModel) handleUserDetailView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "down", "j":
-		if m.userDetailTab == 0 {
+		switch m.userDetailTab {
+		case 0:
 			// Navigate profile rows manually
 			if m.userDetailCursor < len(m.userProfileRows)-1 {
 				m.userDetailCursor++
 			}
-		} else if m.userDetailTab == 1 {
+		case 1:
 			// Let table handle navigation
 			m.userReposTable, cmd = m.userReposTable.Update(msg)
 			return m, cmd
-		} else if m.userDetailTab == 2 {
+		case 2:
 			// Let table handle navigation
 			m.userGistsTable, cmd = m.userGistsTable.Update(msg)
 			return m, cmd
@@ -2227,7 +2243,11 @@ func (m TUIModel) handleUserDetailView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "d", "D", "delete":
 		// Delete selected repo or gist
-		if m.userDetailTab == 1 && len(m.userRepos) > 0 {
+		switch m.userDetailTab {
+		case 1:
+			if len(m.userRepos) == 0 {
+				return m, nil
+			}
 			// Delete repo
 			cursor := m.userReposTable.Cursor()
 			if cursor < 0 || cursor >= len(m.userRepos) {
@@ -2251,7 +2271,7 @@ func (m TUIModel) handleUserDetailView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.deleteConfirmVisible = true
 			return m, m.deleteConfirmForm.Init()
 
-		} else if m.userDetailTab == 2 {
+		case 2:
 			// Delete gist
 			cursor := m.userGistsTable.Cursor()
 			fileIdx := m.getGistFileIndexFromTableCursor(cursor)
@@ -3305,7 +3325,8 @@ func (m TUIModel) renderUserDetail() string {
 	b.WriteString("\n\n")
 
 	// Content based on active tab
-	if m.userDetailTab == 0 {
+	switch m.userDetailTab {
+	case 0:
 		// Profile tab - render as list with selector
 		b.WriteString(NormalStyle.Render("GitHub Profile"))
 		b.WriteString("\n")
@@ -3332,7 +3353,7 @@ func (m TUIModel) renderUserDetail() string {
 			}
 			b.WriteString("\n")
 		}
-	} else if m.userDetailTab == 1 {
+	case 1:
 		// Repos tab - use Bubbles table with full-width selection and divider
 		if len(m.userRepos) == 0 {
 			// Add divider for consistency with table view (matches renderBubblesTableWithFullWidth pattern)
@@ -3342,7 +3363,7 @@ func (m TUIModel) renderUserDetail() string {
 		} else {
 			b.WriteString(m.renderBubblesTableWithFullWidth(m.userReposTable))
 		}
-	} else if m.userDetailTab == 2 {
+	case 2:
 		// Gists tab - use Bubbles table with full-width selection and divider
 		if len(m.userGistFiles) == 0 {
 			// Add divider for consistency with table view (matches renderBubblesTableWithFullWidth pattern)
@@ -3801,6 +3822,7 @@ func RunMultiRepoTUI(
 			LaunchDockerSearch:       m.launchDockerSearch,
 			LaunchCachedLayers:       m.launchCachedLayers,
 			LaunchSearchCachedLayers: m.launchSearchCachedLayers,
+			LaunchWayback:            m.launchWayback,
 			DockerSearchQuery:        m.launchDockerSearchQuery,
 		}, nil
 	}
@@ -3813,6 +3835,7 @@ type TUIResult struct {
 	LaunchDockerSearch       bool
 	LaunchCachedLayers       bool
 	LaunchSearchCachedLayers bool
+	LaunchWayback            bool
 	DockerSearchQuery        string // pre-filled query for Docker Hub search
 }
 

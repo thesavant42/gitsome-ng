@@ -167,6 +167,14 @@ func main() {
 					continue // Return to main TUI after search
 				}
 
+				// If user wants to launch Wayback Machine browser
+				if result.LaunchWayback {
+					if err := ui.RunWaybackBrowser(log.Default(), database); err != nil {
+						ui.PrintError(fmt.Sprintf("Wayback browser failed: %v", err))
+					}
+					continue // Return to main TUI after browsing
+				}
+
 				// If user wants to switch projects, close current db and show selector
 				if result.SwitchProject {
 					database.Close()

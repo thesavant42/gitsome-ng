@@ -585,3 +585,110 @@ WHERE image_ref = ?
 const selectImageManifestBuildSteps = `
 SELECT build_steps FROM image_manifests WHERE image_ref = ?
 `
+
+// Schema for wayback CDX records (Wayback Machine archive URLs)
+const createWaybackRecordsTable = `
+CREATE TABLE IF NOT EXISTS wayback_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    url TEXT UNIQUE NOT NULL,
+    domain TEXT NOT NULL,
+    timestamp TEXT,
+    status_code INTEGER,
+    mime_type TEXT,
+    tags TEXT DEFAULT '',
+    fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_wayback_domain ON wayback_records(domain);
+CREATE INDEX IF NOT EXISTS idx_wayback_timestamp ON wayback_records(timestamp);
+CREATE INDEX IF NOT EXISTS idx_wayback_mime ON wayback_records(mime_type);
+`
+
+// SQL queries for wayback records
+const insertWaybackRecord = `
+INSERT OR IGNORE INTO wayback_records (url, domain, timestamp, status_code, mime_type, tags)
+VALUES (?, ?, ?, ?, ?, ?)
+`
+
+const selectWaybackRecords = `
+SELECT id, url, domain, timestamp, status_code, mime_type, tags, fetched_at
+FROM wayback_records
+WHERE domain = ?
+ORDER BY timestamp DESC
+`
+
+const selectWaybackRecordsByFilter = `
+SELECT id, url, domain, timestamp, status_code, mime_type, tags, fetched_at
+FROM wayback_records
+WHERE domain = ?
+AND (? = '' OR mime_type LIKE ?)
+AND (? = '' OR url LIKE ?)
+AND (? = '' OR tags LIKE ?)
+ORDER BY timestamp DESC
+LIMIT ? OFFSET ?
+`
+
+const selectWaybackRecordCount = `
+SELECT COUNT(*) FROM wayback_records WHERE domain = ?
+`
+
+const selectWaybackRecordCountFiltered = `
+SELECT COUNT(*) FROM wayback_records
+WHERE domain = ?
+AND (? = '' OR mime_type LIKE ?)
+AND (? = '' OR url LIKE ?)
+AND (? = '' OR tags LIKE ?)
+`
+
+const selectWaybackDomains = `
+SELECT DISTINCT domain, COUNT(*) as record_count
+FROM wayback_records
+GROUP BY domain
+ORDER BY record_count DESC
+`
+
+const updateWaybackRecordTags = `
+UPDATE wayback_records SET tags = ? WHERE id = ?
+`
+
+const deleteWaybackRecord = `
+DELETE FROM wayback_records WHERE id = ?
+`
+
+const deleteWaybackRecordsByDomain = `
+DELETE FROM wayback_records WHERE domain = ?
+`
+
+// Schema for wayback fetch state (tracks resume keys for interrupted fetches)
+const createWaybackFetchStateTable = `
+CREATE TABLE IF NOT EXISTS wayback_fetch_state (
+    domain TEXT PRIMARY KEY,
+    resume_key TEXT,
+    total_fetched INTEGER DEFAULT 0,
+    is_complete BOOLEAN DEFAULT FALSE,
+    last_error TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+`
+
+// SQL queries for wayback fetch state
+const upsertWaybackFetchState = `
+INSERT INTO wayback_fetch_state (domain, resume_key, total_fetched, is_complete, last_error, updated_at)
+VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+ON CONFLICT(domain) DO UPDATE SET
+    resume_key = excluded.resume_key,
+    total_fetched = excluded.total_fetched,
+    is_complete = excluded.is_complete,
+    last_error = excluded.last_error,
+    updated_at = CURRENT_TIMESTAMP
+`
+
+const selectWaybackFetchState = `
+SELECT domain, resume_key, total_fetched, is_complete, last_error, updated_at
+FROM wayback_fetch_state
+WHERE domain = ?
+`
+
+const deleteWaybackFetchState = `
+DELETE FROM wayback_fetch_state WHERE domain = ?
+`
