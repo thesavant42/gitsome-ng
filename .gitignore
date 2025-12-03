@@ -20,3 +20,4 @@ __pycache__/
 /bugs
 *.tar.gz
 testing-fixtures/
+/downloads

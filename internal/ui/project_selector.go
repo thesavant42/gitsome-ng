@@ -62,7 +62,7 @@ func (m ProjectSelectorModel) handleSelectMode(msg tea.KeyMsg) (tea.Model, tea.C
 	totalOptions := len(m.projects) + 2 // projects + "Create New" + "Exit"
 
 	switch msg.String() {
-	case "q", "ctrl+c":
+	case "esc", "q", "ctrl+c":
 		m.result = &ProjectResult{Action: "exit"}
 		m.quitting = true
 		return m, tea.Quit
@@ -167,9 +167,9 @@ func (m ProjectSelectorModel) View() string {
 				// Display project name without .db extension
 				displayName := strings.TrimSuffix(proj, filepath.Ext(proj))
 				if i == m.cursor {
-					b.WriteString(SelectedStyle.Width(layout.InnerWidth).Render(displayName))
+					b.WriteString(SelectedStyle.Width(layout.InnerWidth).Render("• " + displayName))
 				} else {
-					b.WriteString(NormalStyle.Render(displayName))
+					b.WriteString(NormalStyle.Render("• " + displayName))
 				}
 				b.WriteString("\n")
 			}
@@ -178,17 +178,17 @@ func (m ProjectSelectorModel) View() string {
 
 		// Create New option
 		if m.cursor == len(m.projects) {
-			b.WriteString(SelectedStyle.Width(layout.InnerWidth).Render("Create New Project"))
+			b.WriteString(SelectedStyle.Width(layout.InnerWidth).Render("• Create New Project"))
 		} else {
-			b.WriteString(NormalStyle.Render("Create New Project"))
+			b.WriteString(NormalStyle.Render("• Create New Project"))
 		}
 		b.WriteString("\n")
 
 		// Exit option
 		if m.cursor == len(m.projects)+1 {
-			b.WriteString(SelectedStyle.Width(layout.InnerWidth).Render("Exit"))
+			b.WriteString(SelectedStyle.Width(layout.InnerWidth).Render("• Exit"))
 		} else {
-			b.WriteString(NormalStyle.Render("Exit"))
+			b.WriteString(NormalStyle.Render("• Exit"))
 		}
 		b.WriteString("\n")
 	}

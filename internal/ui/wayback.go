@@ -8,7 +8,6 @@ import (
 
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/stopwatch"
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -27,7 +26,6 @@ type WaybackModel struct {
 	table     table.Model
 	textInput textinput.Model
 	spinner   spinner.Model
-	stopwatch stopwatch.Model
 	progress  progress.Model
 
 	// State
@@ -47,7 +45,8 @@ type WaybackModel struct {
 	fetching       bool
 	fetchProgress  int
 	fetchPage      int
-	fetchEstimated int // Estimated total records (for progress bar)
+	fetchEstimated int    // Total records from API (actual, not estimated)
+	fetchResumeKey string // Resume key for continuing fetch after page count
 	cancelFetch    chan struct{}
 	fetchCancelled bool // Track if cancel was requested to prevent double-close
 
@@ -64,11 +63,12 @@ type WaybackModel struct {
 	detailScroll int               // Scroll position in detail view
 
 	// UI state
-	err               error
-	statusMsg         string
-	quitting          bool
-	returnToMain      bool
-	layoutInitialized bool
+	err                    error
+	statusMsg              string
+	quitting               bool
+	returnToMain           bool
+	layoutInitialized      bool
+	switchToDomainsBrowser bool // Flag to switch to domains view after loading
 }
 
 type waybackViewMode int
@@ -102,10 +102,28 @@ type waybackFetchCompleteMsg struct {
 	err     error
 }
 
+// waybackBatchMsg is sent after each batch is fetched and inserted
+type waybackBatchMsg struct {
+	batch     []models.CDXRecord
+	resumeKey string
+	total     int
+	page      int
+	inserted  int
+	hasMore   bool
+	err       error
+}
+
 type waybackRecordsLoadedMsg struct {
 	records []models.CDXRecord
 	total   int
 	err     error
+}
+
+// waybackPageCountMsg is sent after querying the total page count
+type waybackPageCountMsg struct {
+	pages int
+	total int // pages * batchSize
+	err   error
 }
 
 type waybackDomainsLoadedMsg struct {
@@ -135,8 +153,7 @@ func NewWaybackModel(logger *log.Logger, database *db.DB) WaybackModel {
 	ApplyTableStyles(&t)
 
 	spinnerModel := NewAppSpinner()
-	sw := stopwatch.NewWithInterval(100 * time.Millisecond)
-	prog := progress.New(progress.WithDefaultGradient())
+	prog := progress.New(progress.WithGradient("#FFFFFF", "#FF0000"))
 
 	return WaybackModel{
 		client:    api.NewWaybackClient(nil), // Pass nil to silence logger during TUI
@@ -146,7 +163,6 @@ func NewWaybackModel(logger *log.Logger, database *db.DB) WaybackModel {
 		table:     t,
 		textInput: ti,
 		spinner:   spinnerModel,
-		stopwatch: sw,
 		progress:  prog,
 		viewMode:  waybackViewInput,
 		inputMode: waybackInputDomain,
@@ -157,7 +173,7 @@ func NewWaybackModel(logger *log.Logger, database *db.DB) WaybackModel {
 
 // Init implements tea.Model
 func (m WaybackModel) Init() tea.Cmd {
-	return tea.Batch(textinput.Blink, m.spinner.Tick)
+	return tea.Batch(textinput.Blink, m.spinner.Tick, m.loadCachedDomains())
 }
 
 // Update implements tea.Model
@@ -181,54 +197,111 @@ func (m WaybackModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
 
-	case stopwatch.TickMsg:
-		var cmd tea.Cmd
-		m.stopwatch, cmd = m.stopwatch.Update(msg)
-		return m, cmd
-
-	case stopwatch.StartStopMsg:
-		var cmd tea.Cmd
-		m.stopwatch, cmd = m.stopwatch.Update(msg)
-		return m, cmd
-
 	case progress.FrameMsg:
 		progressModel, cmd := m.progress.Update(msg)
 		m.progress = progressModel.(progress.Model)
 		return m, cmd
 
+	case waybackPageCountMsg:
+		// Got the total page count from the API
+		if msg.err == nil && msg.total > 0 {
+			m.fetchEstimated = msg.total
+			if m.fetchResumeKey != "" {
+				m.statusMsg = fmt.Sprintf("Resuming: %d of %d records...", m.fetchProgress, msg.total)
+			} else {
+				m.statusMsg = fmt.Sprintf("Found %d records to fetch...", msg.total)
+			}
+		}
+		// Now start the actual fetch (resume if we have a key, fresh otherwise)
+		if m.fetchResumeKey != "" {
+			resumeKey := m.fetchResumeKey
+			m.fetchResumeKey = "" // Clear it
+			return m, m.doFetchWithResume(resumeKey)
+		}
+		return m, m.doFetch()
+
+	case waybackBatchMsg:
+		// Update progress from this batch
+		m.fetchProgress = msg.total
+		m.fetchPage = msg.page
+
+		// Update status with actual total if we have it
+		if m.fetchEstimated > 0 {
+			m.statusMsg = fmt.Sprintf("Page %d: %d of %d records (%d new)", msg.page, msg.total, m.fetchEstimated, msg.inserted)
+		} else {
+			m.statusMsg = fmt.Sprintf("Page %d: %d records (%d new)", msg.page, msg.total, msg.inserted)
+		}
+
+		// Calculate progress percentage for the animated bar
+		var progressCmd tea.Cmd
+		if m.fetchEstimated > 0 {
+			percent := float64(m.fetchProgress) / float64(m.fetchEstimated)
+			if percent > 1.0 {
+				percent = 0.99 // Cap at 99% until truly complete
+			}
+			progressCmd = m.progress.SetPercent(percent)
+		}
+
+		// Handle errors
+		if msg.err != nil {
+			m.fetching = false
+			errStr := msg.err.Error()
+			if errStr == "cancelled" {
+				m.statusMsg = fmt.Sprintf("Fetch cancelled. Got %d records.", msg.total)
+			} else {
+				// Clean up error message - extract just the status code if it's an HTTP error
+				cleanErr := errStr
+				if strings.Contains(errStr, "status 504") {
+					cleanErr = "Gateway timeout (504) - Wayback Machine busy"
+				} else if strings.Contains(errStr, "status 503") {
+					cleanErr = "Service unavailable (503) - Wayback Machine busy"
+				} else if strings.Contains(errStr, "status 429") {
+					cleanErr = "Rate limited (429) - too many requests"
+				} else if strings.Contains(errStr, "<html>") || strings.Contains(errStr, "<body>") {
+					// Strip HTML from error messages
+					if idx := strings.Index(errStr, ":"); idx > 0 {
+						cleanErr = strings.TrimSpace(errStr[:idx])
+					}
+				}
+				// Don't set m.err for transient API errors - just show status message
+				m.statusMsg = fmt.Sprintf("Stopped: %s. Got %d records.", cleanErr, msg.total)
+			}
+			return m, m.loadRecordsFromDB()
+		}
+
+		// If more pages, fetch next batch; otherwise complete
+		if msg.hasMore && msg.resumeKey != "" {
+			// Continue fetching - start next batch with progress animation
+			if progressCmd != nil {
+				return m, tea.Batch(progressCmd, m.doFetchWithResume(msg.resumeKey))
+			}
+			return m, m.doFetchWithResume(msg.resumeKey)
+		}
+
+		// All done! Set progress to 100%
+		m.fetching = false
+		m.statusMsg = fmt.Sprintf("Fetch complete: %d records saved to database", msg.total)
+		return m, tea.Batch(m.progress.SetPercent(1.0), m.loadRecordsFromDB())
+
 	case waybackFetchProgressMsg:
 		m.fetchProgress = msg.count
 		m.fetchPage = msg.page
-		// Estimate total based on first page results (batch size)
-		// This is a rough estimate since we don't know actual total until complete
-		if msg.page == 1 && msg.count > 0 {
-			// If first page has results, assume there might be more
-			// Estimate conservatively (don't over-promise)
-			m.fetchEstimated = msg.count * 5 // Assume ~5 pages worth
-		}
 		return m, nil
 
 	case waybackFetchCompleteMsg:
 		m.fetching = false
 		if msg.err != nil {
 			if msg.err.Error() == "cancelled" {
-				m.statusMsg = fmt.Sprintf("Fetch cancelled. Got %d records.", len(msg.records))
+				m.statusMsg = fmt.Sprintf("Fetch cancelled. Got %d records (already saved to DB).", len(msg.records))
 			} else {
 				m.err = msg.err
-				m.statusMsg = fmt.Sprintf("Error: %v", msg.err)
+				m.statusMsg = fmt.Sprintf("Error: %v (partial results saved to DB)", msg.err)
 			}
+		} else {
+			m.statusMsg = fmt.Sprintf("Fetch complete: %d records saved to database", len(msg.records))
 		}
-		// Save records to database
-		if m.database != nil && len(msg.records) > 0 {
-			inserted, err := m.database.InsertWaybackRecords(msg.records)
-			if err != nil {
-				m.statusMsg = fmt.Sprintf("Fetched %d, DB error: %v", len(msg.records), err)
-			} else {
-				m.statusMsg = fmt.Sprintf("Fetched %d records, %d new inserted", len(msg.records), inserted)
-			}
-		}
-		// Stop stopwatch and load from database
-		return m, tea.Batch(m.stopwatch.Stop(), m.loadRecordsFromDB())
+		// Records are already inserted by batch callback, just load from DB
+		return m, m.loadRecordsFromDB()
 
 	case waybackRecordsLoadedMsg:
 		if msg.err != nil {
@@ -244,12 +317,20 @@ func (m WaybackModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case waybackDomainsLoadedMsg:
 		if msg.err != nil {
-			m.err = msg.err
+			// Don't show error for initial load - just means no cached domains yet
+			if m.viewMode != waybackViewInput {
+				m.err = msg.err
+			}
 			return m, nil
 		}
 		m.cachedDomains = msg.domains
 		m.domainCursor = 0
-		m.viewMode = waybackViewDomains
+		// Only switch to domains view if user explicitly requested it (Tab key)
+		// If we're on input view during init, just store the domains for display
+		if m.switchToDomainsBrowser {
+			m.viewMode = waybackViewDomains
+			m.switchToDomainsBrowser = false
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -321,6 +402,7 @@ func (m WaybackModel) handleDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m WaybackModel) handleInputKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "q":
+		m.quitting = true
 		m.returnToMain = true
 		return m, tea.Quit
 
@@ -344,33 +426,37 @@ func (m WaybackModel) handleInputKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 						m.statusMsg = fmt.Sprintf("Loading %d cached records for %s", fetchState.TotalFetched, domain)
 						return m, m.loadRecordsFromDB()
 					} else if fetchState.ResumeKey != "" {
-						// Resume incomplete fetch
-						m.statusMsg = fmt.Sprintf("Resuming fetch from %d records...", fetchState.TotalFetched)
+						// Resume incomplete fetch - get total count first
+						m.statusMsg = fmt.Sprintf("Resuming from %d records, querying total...", fetchState.TotalFetched)
 						m.viewMode = waybackViewFetching
 						m.fetching = true
 						m.fetchProgress = fetchState.TotalFetched
 						m.fetchPage = 0
+						m.fetchEstimated = 0
+						m.fetchResumeKey = fetchState.ResumeKey
 						m.fetchCancelled = false
 						m.cancelFetch = make(chan struct{})
-						return m, tea.Batch(m.stopwatch.Start(), m.doFetchWithResume(fetchState.ResumeKey))
+						return m, m.getPageCount()
 					}
 				}
 			}
 
-			// Start fresh fetch
+			// Start fresh fetch - first get the total count, then fetch
 			m.viewMode = waybackViewFetching
 			m.fetching = true
 			m.fetchProgress = 0
 			m.fetchPage = 0
+			m.fetchEstimated = 0
 			m.fetchCancelled = false
 			m.cancelFetch = make(chan struct{})
-			// Start stopwatch and fetch
-			return m, tea.Batch(m.stopwatch.Start(), m.doFetch())
+			m.statusMsg = "Querying total records..."
+			return m, m.getPageCount()
 		}
 		return m, nil
 
 	case "tab":
 		// Switch to domain browser
+		m.switchToDomainsBrowser = true
 		return m, m.loadCachedDomains()
 
 	default:
@@ -389,6 +475,7 @@ func (m WaybackModel) handleFetchingKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			close(m.cancelFetch)
 			m.fetchCancelled = true
 		}
+		m.quitting = true
 		m.returnToMain = true
 		return m, tea.Quit
 	}
@@ -699,20 +786,6 @@ func (m WaybackModel) View() string {
 		contentBuilder.WriteString(m.renderDomainsView())
 	case waybackViewDetail:
 		contentBuilder.WriteString(m.renderDetailView())
-	default:
-		// No content for unknown view mode
-	}
-
-	// Status message
-	if m.statusMsg != "" {
-		contentBuilder.WriteString("\n")
-		contentBuilder.WriteString(HintStyle.Render(m.statusMsg))
-	}
-
-	// Error message
-	if m.err != nil {
-		contentBuilder.WriteString("\n")
-		contentBuilder.WriteString(StatusMsgStyle.Render(fmt.Sprintf("Error: %v", m.err)))
 	}
 
 	// Calculate available height
@@ -732,8 +805,14 @@ func (m WaybackModel) View() string {
 	result.WriteString(borderedContent)
 	result.WriteString("\n")
 
-	// Help text
-	result.WriteString(" " + m.getHelpText())
+	// Footer - plain text, no lipgloss
+	if m.err != nil {
+		result.WriteString(fmt.Sprintf(" Error: %v\n", m.err))
+	} else if m.statusMsg != "" {
+		result.WriteString(" " + m.statusMsg + "\n")
+	}
+
+	result.WriteString(" " + m.getHelpText() + "\n")
 
 	return result.String()
 }
@@ -748,6 +827,31 @@ func (m WaybackModel) renderInputView() string {
 	b.WriteString(DimStyle.Render(" Examples: playground.bfl.ai, https://example.com/path"))
 	b.WriteString("\n\n")
 	b.WriteString(DimStyle.Render(" Press Tab to browse cached domains."))
+
+	// Show recently cached domains if available
+	if len(m.cachedDomains) > 0 {
+		b.WriteString("\n\n")
+		b.WriteString(DimStyle.Render(" Recently cached:"))
+		b.WriteString("\n")
+
+		// Show up to 10 most recent domains
+		maxShow := 10
+		if len(m.cachedDomains) < maxShow {
+			maxShow = len(m.cachedDomains)
+		}
+		for i := 0; i < maxShow; i++ {
+			d := m.cachedDomains[i]
+			line := fmt.Sprintf("   %s (%d records)", d.Domain, d.RecordCount)
+			b.WriteString(DimStyle.Render(line))
+			b.WriteString("\n")
+		}
+		if len(m.cachedDomains) > maxShow {
+			more := len(m.cachedDomains) - maxShow
+			b.WriteString(DimStyle.Render(fmt.Sprintf("   ... and %d more (press Tab to browse)", more)))
+			b.WriteString("\n")
+		}
+	}
+
 	return b.String()
 }
 
@@ -771,21 +875,11 @@ func (m WaybackModel) renderFetchingView() string {
 		m.progress.Width = progressBarWidth
 		b.WriteString(" ")
 		b.WriteString(m.progress.ViewAs(percent))
-		b.WriteString("\n\n")
-	}
-
-	b.WriteString(ProgressStyle.Render(fmt.Sprintf(" Records: %d  |  Page: %d", m.fetchProgress, m.fetchPage)))
-	b.WriteString("\n")
-	if m.fetchEstimated > 0 {
-		b.WriteString(DimStyle.Render(fmt.Sprintf(" Estimated: ~%d records", m.fetchEstimated)))
 		b.WriteString("\n")
 	}
+
 	b.WriteString("\n")
 	b.WriteString(DimStyle.Render(" Press Esc/Q to cancel and save progress"))
-	b.WriteString("\n\n")
-	// Stopwatch at bottom - using native Bubbles stopwatch View()
-	b.WriteString(DimStyle.Render(" Elapsed: "))
-	b.WriteString(NormalStyle.Render(m.stopwatch.View()))
 	return b.String()
 }
 
@@ -812,6 +906,17 @@ func (m WaybackModel) renderTableView() string {
 	}
 	queryInfo += fmt.Sprintf("  |  Page %d/%d  |  Total: %d", m.page, maxPage, m.totalRecords)
 	b.WriteString(AccentStyle.Render(queryInfo))
+	b.WriteString("\n\n")
+
+	// Info row 1: Position tracking
+	currentRow := m.table.Cursor() + 1
+	totalRows := len(m.filteredRecords)
+	b.WriteString(fmt.Sprintf(" Row %d/%d", currentRow, totalRows))
+	b.WriteString("\n")
+
+	// Info row 2: Viewport information
+	pageOffset := (m.page - 1) * m.pageSize
+	b.WriteString(fmt.Sprintf(" Viewing records %d-%d of %d total", pageOffset+1, pageOffset+len(m.filteredRecords), m.totalRecords))
 	b.WriteString("\n\n")
 
 	// Table
@@ -1042,27 +1147,42 @@ func (m WaybackModel) doFetch() tea.Cmd {
 
 func (m WaybackModel) doFetchWithResume(resumeKey string) tea.Cmd {
 	return func() tea.Msg {
-		// Fetch ALL records using pagination with resume keys
-		result := m.client.FetchAllCDXWithResume(m.domain, resumeKey, func(_, _ int) {
-			// Progress callback - not used in TUI context (async fetch)
-		}, m.cancelFetch)
+		// Check for cancellation before starting
+		select {
+		case <-m.cancelFetch:
+			return waybackBatchMsg{err: fmt.Errorf("cancelled"), hasMore: false}
+		default:
+		}
 
-		// Save fetch state to database
-		if m.database != nil {
-			lastError := ""
-			if result.Error != nil {
-				lastError = result.Error.Error()
-			}
+		// Fetch ONE batch only
+		resp, err := m.client.FetchCDX(m.domain, resumeKey)
+		if err != nil {
+			return waybackBatchMsg{err: err, hasMore: false}
+		}
+
+		// Insert this batch into DB
+		inserted := 0
+		if m.database != nil && len(resp.Records) > 0 {
+			inserted, _ = m.database.InsertWaybackRecords(resp.Records)
+			// Save fetch state after this batch
 			_ = m.database.SaveWaybackFetchState(
 				m.domain,
-				result.ResumeKey,
-				len(result.Records),
-				result.IsComplete,
-				lastError,
+				resp.ResumeKey,
+				m.fetchProgress+len(resp.Records),
+				!resp.HasMore,
+				"",
 			)
 		}
 
-		return waybackFetchCompleteMsg{records: result.Records, err: result.Error}
+		return waybackBatchMsg{
+			batch:     resp.Records,
+			resumeKey: resp.ResumeKey,
+			total:     m.fetchProgress + len(resp.Records),
+			page:      m.fetchPage + 1,
+			inserted:  inserted,
+			hasMore:   resp.HasMore,
+			err:       nil,
+		}
 	}
 }
 
@@ -1093,6 +1213,20 @@ func (m WaybackModel) loadCachedDomains() tea.Cmd {
 		}
 		domains, err := m.database.GetWaybackDomains()
 		return waybackDomainsLoadedMsg{domains: domains, err: err}
+	}
+}
+
+// getPageCount queries the CDX API for the total number of pages
+func (m WaybackModel) getPageCount() tea.Cmd {
+	return func() tea.Msg {
+		pages, err := m.client.GetCDXPageCount(m.domain)
+		if err != nil {
+			// Non-fatal - we can still fetch without knowing total
+			return waybackPageCountMsg{pages: 0, total: 0, err: err}
+		}
+		// Each page has cdxBatchSize records (100)
+		total := pages * 100
+		return waybackPageCountMsg{pages: pages, total: total, err: nil}
 	}
 }
 

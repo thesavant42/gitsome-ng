@@ -38,9 +38,10 @@ func NewLayout(terminalWidth, terminalHeight int) Layout {
 	if width < MinViewportWidth {
 		width = MinViewportWidth
 	}
-	// Calculate table height: terminal height minus overhead
-	// Overhead: 1 top margin + 2 border (top/bottom) + 2 padding + 3 tabs + 2 header + 1 footer = ~11 lines
-	tableHeight := terminalHeight - 11
+	// Calculate table height to fill the bordered area
+	// Border content height = terminalHeight - 1 (top margin) - 2 (border) = terminalHeight - 3
+	// Table height = border content - 4 (tabs + spacing) - 2 (table header) - 3 (divider + 2 footer rows)
+	tableHeight := terminalHeight - 3 - 4 - 2 - 3
 	if tableHeight < 5 {
 		tableHeight = 5
 	}
@@ -263,9 +264,9 @@ func ApplyTableStyles(t *table.Model) {
 		Foreground(ColorText).
 		Background(lipgloss.NoColor{}).
 		Bold(true)
-	// CRITICAL: Clear default cell padding to ensure column widths match InnerWidth exactly
+	// CRITICAL: Clear default cell padding to ensure column widths match TableWidth exactly
 	// Bubbles table DefaultStyles() has Padding(0, 1) which adds 2 chars per cell,
-	// causing row width to exceed InnerWidth and truncate the selection bar
+	// causing row width to exceed TableWidth and truncate the selection bar
 	s.Cell = s.Cell.Foreground(ColorText).Padding(0)
 	t.SetStyles(s)
 }

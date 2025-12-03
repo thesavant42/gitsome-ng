@@ -18,7 +18,7 @@ import (
 
 const (
 	// Rate limiting - be respectful to the Wayback Machine
-	cdxRequestDelay = 3 * time.Second   // Conservative delay between requests
+	cdxRequestDelay = 1 * time.Second   // Delay between requests
 	cdxTimeout      = 180 * time.Second // 3 minutes for large domain queries
 	cdxBatchSize    = 100               // Conservative batch size to reduce timeouts
 	// Note: Smaller batches = more requests but fewer timeouts and easier to resume
@@ -95,6 +95,51 @@ func BuildCDXQuery(domain string, resumeKey string) string {
 	}
 
 	return query
+}
+
+// GetCDXPageCount queries the CDX API to get the total number of pages for a domain
+// This is a lightweight call that returns just the page count, not the actual records
+func (c *WaybackClient) GetCDXPageCount(domain string) (int, error) {
+	// Clean domain
+	domain = strings.ToLower(strings.TrimSpace(domain))
+
+	// Build query with showNumPages=true - this returns just the page count
+	rawURL := fmt.Sprintf(
+		"https://web.archive.org/cdx/search/cdx?url=*.%s&output=json&showNumPages=true&pageSize=%d",
+		domain,
+		cdxBatchSize,
+	)
+
+	req, err := http.NewRequest("GET", rawURL, nil)
+	if err != nil {
+		return 0, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("Accept", "text/plain, */*")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("CDX API returned status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	// Response is just a number (the page count)
+	numPages, err := strconv.Atoi(strings.TrimSpace(string(body)))
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse page count: %w", err)
+	}
+
+	return numPages, nil
 }
 
 // FetchCDX fetches CDX records for a domain with pagination support
@@ -228,18 +273,24 @@ type FetchResult struct {
 	Error      error  // Non-nil if fetch failed (but records may still be partial)
 }
 
+// BatchCallback is called after each batch of records is fetched
+// Parameters: batch records, current resume key, total count so far, page number
+// Return false to stop fetching
+type BatchCallback func(batch []models.CDXRecord, resumeKey string, totalCount, page int) bool
+
 // FetchAllCDX fetches all CDX records for a domain, handling pagination
 // Calls the progress callback with (current count, page number) after each page
 // Returns early if cancelled via the cancel channel
 // On rate limiting (503), returns partial results with nil error
 func (c *WaybackClient) FetchAllCDX(domain string, progress func(count, page int), cancel <-chan struct{}) ([]models.CDXRecord, error) {
-	result := c.FetchAllCDXWithResume(domain, "", progress, cancel)
+	result := c.FetchAllCDXWithResume(domain, "", progress, nil, cancel)
 	return result.Records, result.Error
 }
 
 // FetchAllCDXWithResume fetches CDX records starting from a resume key
+// The batchCallback is called after each batch is fetched, allowing immediate processing
 // Returns FetchResult with records, current resume key, and completion status
-func (c *WaybackClient) FetchAllCDXWithResume(domain string, startResumeKey string, progress func(count, page int), cancel <-chan struct{}) FetchResult {
+func (c *WaybackClient) FetchAllCDXWithResume(domain string, startResumeKey string, progress func(count, page int), batchCallback BatchCallback, cancel <-chan struct{}) FetchResult {
 	var allRecords []models.CDXRecord
 	resumeKey := startResumeKey
 	page := 0
@@ -316,6 +367,19 @@ func (c *WaybackClient) FetchAllCDXWithResume(domain string, startResumeKey stri
 		retryCount = 0
 
 		allRecords = append(allRecords, resp.Records...)
+
+		// Call batch callback to allow immediate processing (e.g., DB insert)
+		if batchCallback != nil {
+			if !batchCallback(resp.Records, resp.ResumeKey, len(allRecords), page) {
+				// Callback requested stop
+				return FetchResult{
+					Records:    allRecords,
+					ResumeKey:  resp.ResumeKey,
+					IsComplete: false,
+					Error:      nil,
+				}
+			}
+		}
 
 		// Report progress
 		if progress != nil {

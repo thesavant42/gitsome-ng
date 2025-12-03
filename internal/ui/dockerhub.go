@@ -55,8 +55,8 @@ func NewDockerHubSearchModel(logger *log.Logger, database *db.DB) DockerHubSearc
 	// Calculate layout
 	layout := DefaultLayout()
 
-	// Calculate initial column widths to fill InnerWidth for full-width selector
-	columns := calculateDockerHubColumns(layout.InnerWidth)
+	// Calculate initial column widths to fill TableWidth (accounts for bubbles overhead)
+	columns := calculateDockerHubColumns(layout.TableWidth)
 
 	t := table.New(
 		table.WithColumns(columns),
@@ -101,7 +101,7 @@ func (m DockerHubSearchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Update text input width dynamically
 		m.textInput.Width = m.layout.InnerWidth - 10
 		// Always update column widths on resize (for full-width selector highlighting)
-		columns := calculateDockerHubColumns(m.layout.InnerWidth)
+		columns := calculateDockerHubColumns(m.layout.TableWidth)
 		m.table.SetColumns(columns)
 		if m.results != nil {
 			m.updateTable()
@@ -144,6 +144,7 @@ func (m DockerHubSearchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, m.doSearch()
 				}
 			case "esc":
+				m.quitting = true
 				m.returnToMain = true
 				return m, tea.Quit
 			default:
@@ -157,6 +158,7 @@ func (m DockerHubSearchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Handle table mode
 		switch msg.String() {
 		case "q", "esc":
+			m.quitting = true
 			m.returnToMain = true
 			return m, tea.Quit
 
@@ -201,6 +203,7 @@ func (m DockerHubSearchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					selected := m.results.Results[cursor]
 					m.selectedImage = selected.Name
 					m.launchInspector = true
+					m.quitting = true
 					fmt.Printf("DEBUG: selectedImage=%s, launchInspector=%v\n", m.selectedImage, m.launchInspector)
 					return m, tea.Quit
 				}
@@ -223,8 +226,8 @@ func (m DockerHubSearchModel) View() string {
 	// Title
 	contentBuilder.WriteString(TitleStyle.Render("Docker Hub Search"))
 	contentBuilder.WriteString("\n")
-	// White divider after title
-	contentBuilder.WriteString(strings.Repeat("─", m.layout.InnerWidth))
+	// White divider after title (use TableWidth to fit within bordered content area)
+	contentBuilder.WriteString(strings.Repeat("─", m.layout.TableWidth))
 	contentBuilder.WriteString("\n\n")
 
 	// Search input or current query
@@ -263,9 +266,9 @@ func (m DockerHubSearchModel) View() string {
 	}
 
 	// Wrap in bordered box with BOTH width AND height (fixes Bug #5 - right side not visible)
-	// Border uses InnerWidth for content, total width = ViewportWidth
+	// Border uses ViewportWidth (per style guide), content area = InnerWidth
 	borderedContent := BorderStyle.
-		Width(m.layout.InnerWidth).
+		Width(m.layout.ViewportWidth).
 		Height(availableHeight).
 		Render(contentBuilder.String())
 
@@ -364,8 +367,8 @@ func (m *DockerHubSearchModel) updateTable() {
 		}
 	}
 
-	// Get column widths from central calculation function
-	columns := calculateDockerHubColumns(m.layout.InnerWidth)
+	// Get column widths from central calculation function (uses TableWidth for bubbles overhead)
+	columns := calculateDockerHubColumns(m.layout.TableWidth)
 
 	// Extract widths for truncation
 	nameW := columns[0].Width

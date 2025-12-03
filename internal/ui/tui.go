@@ -63,6 +63,7 @@ var linkColors = LinkColors
 
 // Menu options
 var menuOptions = []string{
+	"View Repositories",
 	"Configure Highlight Domains",
 	"Add Repository",
 	"Query Tagged Users",
@@ -126,9 +127,12 @@ type TUIModel struct {
 	layout       Layout
 	columnWidths ColumnWidths
 
-	// Menu state
-	menuVisible bool
+	// Menu state (menu is now the HOME/default view)
+	menuVisible bool // NOTE: This flag is now for overlay menus WITHIN repo view, not the main menu
 	menuCursor  int
+
+	// Repository view state (shown when user selects "View Repositories" from menu)
+	repoViewVisible bool
 
 	// Domain configuration state
 	domainConfigVisible bool
@@ -1007,7 +1011,7 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Main table mode
 		switch msg.String() {
-		case "q", "ctrl+c":
+		case "ctrl+c":
 			m.quitting = true
 			return m, tea.Quit
 
@@ -1027,17 +1031,20 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "ctrl+d":
 			// Launch Docker Hub search
+			m.quitting = true
 			m.launchDockerSearch = true
 			return m, tea.Quit
 
 		case "left", "h":
-			// Navigate to previous repo page
+			// Navigate to previous tab (Combined is first, then repos)
 			if len(m.repos) > 0 {
 				if m.showCombined {
-					// Go from combined to last repo
-					m.showCombined = false
-					m.currentRepoIndex = len(m.repos) - 1
-					m.switchToRepo(m.currentRepoIndex)
+					// Already on Combined (first tab), do nothing
+				} else if m.currentRepoIndex == 0 {
+					// Go from first repo to Combined
+					m.showCombined = true
+					m.currentRepoIndex = -1
+					m.switchToCombined()
 				} else if m.currentRepoIndex > 0 {
 					m.currentRepoIndex--
 					m.switchToRepo(m.currentRepoIndex)
@@ -1046,16 +1053,18 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "right", "l":
-			// Navigate to next repo page (but not when in link selection mode)
+			// Navigate to next tab (Combined is first, then repos)
 			if len(m.repos) > 0 && len(m.pendingLinks) == 0 {
-				if !m.showCombined && m.currentRepoIndex < len(m.repos)-1 {
+				if m.showCombined {
+					// Go from Combined to first repo
+					m.showCombined = false
+					m.currentRepoIndex = 0
+					m.switchToRepo(m.currentRepoIndex)
+				} else if m.currentRepoIndex < len(m.repos)-1 {
 					m.currentRepoIndex++
 					m.switchToRepo(m.currentRepoIndex)
-				} else if !m.showCombined && m.currentRepoIndex == len(m.repos)-1 {
-					// Go to combined stats page
-					m.showCombined = true
-					m.switchToCombined()
 				}
+				// If on last repo, do nothing (no more tabs)
 			}
 			return m, nil
 
@@ -1083,7 +1092,7 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "esc":
-			// Commit pending links
+			// If there are pending links, commit them first
 			if len(m.pendingLinks) > 1 {
 				// Find existing group ID from any pending row, or create new
 				var groupID int
@@ -1113,9 +1122,14 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.database.SaveLink(m.repoOwner, m.repoName, groupID, email)
 					}
 				}
+				// Clear pending and stay on table
+				m.pendingLinks = nil
+				return m, nil
 			}
-			// Clear pending
+			// No pending links - go back to menu (home)
 			m.pendingLinks = nil
+			m.repoViewVisible = false
+			m.menuVisible = true
 			return m, nil
 
 		case "t", "T":
@@ -1355,12 +1369,13 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// handleMenu handles key events when the menu is visible
+// handleMenu handles key events when the menu is visible (menu is the HOME screen)
 func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "esc", "q":
-		m.menuVisible = false
-		return m, nil
+	case "esc", "ctrl+c":
+		// Quit application from menu (home screen)
+		m.quitting = true
+		return m, tea.Quit
 
 	case "up", "k":
 		if m.menuCursor > 0 {
@@ -1377,18 +1392,22 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		// Handle menu selection
 		switch m.menuCursor {
-		case 0: // Configure Highlight Domains
+		case 0: // View Repositories
+			m.menuVisible = false
+			m.repoViewVisible = true
+			// Show the repository table view
+		case 1: // Configure Highlight Domains
 			m.menuVisible = false
 			m.domainConfigVisible = true
 			m.domainCursor = 0
 			m.domainInput = ""
 			m.domainInputActive = false
-		case 1: // Add Repository
+		case 2: // Add Repository
 			m.menuVisible = false
 			m.addRepoVisible = true
 			m.addRepoInput = ""
 			m.addRepoInputActive = true
-		case 2: // Query Tagged Users
+		case 3: // Query Tagged Users
 			m.menuVisible = false
 			if m.database != nil && m.token != "" {
 				// Get tagged users with GitHub logins
@@ -1434,31 +1453,31 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else if m.token == "" {
 				m.exportMessage = "GitHub token required for user queries"
 			}
-		case 3: // Search
+		case 4: // Search
 			m.menuVisible = false
 			m.searchPickerVisible = true
 			m.searchPickerCursor = 0
-		case 4: // Docker Hub Search
-			m.menuVisible = false
+		case 5: // Docker Hub Search
+			m.quitting = true
 			m.launchDockerSearch = true
 			return m, tea.Quit
-		case 5: // Browse Cached Layers
-			m.menuVisible = false
+		case 6: // Browse Cached Layers
+			m.quitting = true
 			m.launchCachedLayers = true
 			return m, tea.Quit
-		case 6: // Search Cached Layers
-			m.menuVisible = false
+		case 7: // Search Cached Layers
+			m.quitting = true
 			m.launchSearchCachedLayers = true
 			return m, tea.Quit
-		case 7: // Wayback Machine
-			m.menuVisible = false
+		case 8: // Wayback Machine
+			m.quitting = true
 			m.launchWayback = true
 			return m, tea.Quit
-		case 8: // Switch Project
-			m.menuVisible = false
+		case 9: // Switch Project
+			m.quitting = true
 			m.switchProject = true
 			return m, tea.Quit
-		case 9: // Export Tab to Markdown
+		case 10: // Export Tab to Markdown
 			m.menuVisible = false
 			filename, err := ExportTabToMarkdown(m.stats, m.repoOwner, m.repoName, m.totalCommits, m.showCombined)
 			if err != nil {
@@ -1466,7 +1485,7 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.exportMessage = fmt.Sprintf("Exported to %s", filename)
 			}
-		case 10: // Export Database Backup
+		case 11: // Export Database Backup
 			m.menuVisible = false
 			if m.dbPath != "" {
 				filename, err := ExportDatabaseBackup(m.dbPath)
@@ -1478,7 +1497,7 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.exportMessage = "Database path not available"
 			}
-		case 11: // Export Project Report
+		case 12: // Export Project Report
 			m.menuVisible = false
 			if m.database != nil {
 				filename, err := ExportProjectReport(m.database, m.dbPath)
@@ -1531,7 +1550,7 @@ func (m TUIModel) handleLocalSearchInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // handleSearchPicker handles key events in search query picker
 func (m TUIModel) handleSearchPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "esc", "q":
+	case "esc":
 		m.searchPickerVisible = false
 		return m, nil
 
@@ -2113,7 +2132,7 @@ func (m TUIModel) handleUserDetailView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg.String() {
-	case "esc", "q":
+	case "esc":
 		m.userDetailVisible = false
 		return m, nil
 
@@ -2191,6 +2210,7 @@ func (m TUIModel) handleUserDetailView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 			// Check if Docker Hub row - redirect to search instead of browser
 			if row.Label == "Docker Hub:" && row.DisplayValue != "" {
+				m.quitting = true
 				m.launchDockerSearch = true
 				m.launchDockerSearchQuery = row.DisplayValue
 				return m, tea.Quit
@@ -2863,17 +2883,23 @@ func (m TUIModel) View() string {
 		return m.renderLocalSearchInput()
 	}
 
-	// Show menu if visible
-	if m.menuVisible {
-		return m.renderMenu()
+	// Show repository view if visible (selected from menu)
+	if m.repoViewVisible {
+		return m.renderRepoView()
 	}
 
+	// DEFAULT: Show menu (home screen)
+	return m.renderMenu()
+}
+
+// renderRepoView renders the repository table view (when selected from menu)
+func (m TUIModel) renderRepoView() string {
 	var b strings.Builder
 
 	// Add top margin to avoid terminal edge
 	b.WriteString("\n")
 
-	// Build content inside border: tabs + table ONLY (footer goes outside)
+	// Build content inside border: tabs + table + stats
 	var contentBuilder strings.Builder
 
 	// Render page indicator (tabs) if multiple repos
@@ -2886,17 +2912,49 @@ func (m TUIModel) View() string {
 	// Render the table with custom row colors for links
 	tableView := m.renderTableWithLinks()
 	contentBuilder.WriteString(tableView)
+	contentBuilder.WriteString("\n")
 
-	// Add border around content (tabs + table ONLY - footer goes outside)
-	// Border.Width sets content width, so use InnerWidth to make total = ViewportWidth
+	// Add white divider line before footer rows
+	dividerLine := strings.Repeat("─", m.layout.InnerWidth)
+	contentBuilder.WriteString(dividerLine)
+	contentBuilder.WriteString("\n")
+
+	// Add two permanent footer rows INSIDE the border
+	currentRow := m.table.Cursor() + 1
+	totalRows := len(m.stats)
+
+	// Row 1: Combined position tracking and stats (white text, plain)
+	row1Text := fmt.Sprintf("Row %d/%d Total Commits/Committers: %d/%d", currentRow, totalRows, m.totalCommits, len(m.stats))
+	row1Padded := row1Text + strings.Repeat(" ", m.layout.InnerWidth-len(row1Text))
+	contentBuilder.WriteString(row1Padded)
+	contentBuilder.WriteString("\n")
+
+	// Row 2: Hotkeys and help (yellow text)
+	hotkeyLabels := "(M)enu, (T)ag/Untag, Query (U)sers, (L)ink/(U)nlink Rows, e(X)port Report"
+	if len(m.pendingLinks) > 0 {
+		hotkeyLabels += fmt.Sprintf(" [SELECTING: %d rows]", len(m.pendingLinks))
+	}
+	helpHint := "Press ? for help"
+	if m.cached {
+		helpHint += " | CACHED"
+	}
+	if m.exportMessage != "" {
+		helpHint = m.exportMessage
+	}
+	row2Text := hotkeyLabels + " " + helpHint
+	// Apply yellow styling to the entire row
+	row2Styled := HintStyle.Render(row2Text)
+	contentBuilder.WriteString(row2Styled)
+
+	// Border around content - no fixed height, shrinks to fit
 	borderedContent := BorderStyle.
 		Width(m.layout.InnerWidth).
 		Render(contentBuilder.String())
 	b.WriteString(borderedContent)
-	b.WriteString("\n")
 
-	// Footer: help text and stats go OUTSIDE the border
+	// Only show detailed help outside border when help is visible
 	if m.helpVisible {
+		b.WriteString("\n")
 		// Two-column layout for keyboard controls
 		leftCol := []string{
 			"Keyboard Controls:",
@@ -2918,7 +2976,6 @@ func (m TUIModel) View() string {
 			"  X              Export project report (all repos summary)",
 			"  M              Open menu (all options)",
 			"  ?              Toggle this help",
-			"  q              Quit",
 		}
 
 		// Calculate left column width (find max length)
@@ -2949,47 +3006,6 @@ func (m TUIModel) View() string {
 		helpBuilder.WriteString(" Tags: [ ]=untagged, [x]=tagged, [!]=scanned (press T to clear for re-scan)")
 
 		b.WriteString(NormalStyle.Render(helpBuilder.String()))
-		b.WriteString("\n")
-	} else {
-		// Build footer with hotkey labels and stats (OUTSIDE border)
-
-		// Line 1: Hotkey labels
-		hotkeyLabels := "(M)enu, (T)ag/Untag, Query (U)sers, (L)ink/(U)nlink Rows, e(X)port Report"
-		if len(m.pendingLinks) > 0 {
-			hotkeyLabels += fmt.Sprintf(" [SELECTING: %d rows]", len(m.pendingLinks))
-		}
-		b.WriteString(" " + HintStyle.Render(hotkeyLabels))
-		b.WriteString("\n")
-
-		// Line 2: Combined stats on right, help text in center
-		centerPart := "Press ? for help, q to quit"
-		if m.cached {
-			centerPart += " | " + AccentStyle.Render("CACHED")
-		}
-		if m.exportMessage != "" {
-			centerPart = AccentStyle.Render(m.exportMessage)
-		}
-
-		rightPart := fmt.Sprintf("Total Commits/Committers: %d/%d", m.totalCommits, len(m.stats))
-
-		// Calculate spacing to fit within InnerWidth (content inside border)
-		// Use lipgloss.Width() for styled strings to get visible width
-		centerPartStyled := HintStyle.Render(centerPart)
-		rightPartStyled := StatsStyle.Render(rightPart)
-		availableWidth := m.layout.InnerWidth - 1 // Subtract 1 for leading space
-		usedWidth := lipgloss.Width(centerPartStyled) + lipgloss.Width(rightPartStyled)
-		remainingSpace := availableWidth - usedWidth
-		if remainingSpace < 4 {
-			remainingSpace = 4
-		}
-		centerSpacing := remainingSpace
-
-		// Build footer line - add leading padding to align with border left edge
-		footer := " " + centerPartStyled +
-			strings.Repeat(" ", centerSpacing) +
-			rightPartStyled
-
-		b.WriteString(footer)
 		b.WriteString("\n")
 	}
 
@@ -3026,20 +3042,22 @@ func (m TUIModel) renderPageIndicator() string {
 	// So tabs + padding = InnerWidth - 3
 	availableForTabs := m.layout.InnerWidth - 3
 
-	// Build all tab labels
+	// Build all tab labels - Combined is always first
 	var labels []string
 	activeIdx := 0
 
+	// Combined tab is always first
+	labels = append(labels, "Combined")
+	if m.showCombined && !m.searchActive {
+		activeIdx = 0
+	}
+
+	// Then individual repos
 	for i, repo := range m.repos {
 		labels = append(labels, fmt.Sprintf("%s/%s", repo.Owner, repo.Name))
 		if i == m.currentRepoIndex && !m.showCombined && !m.searchActive {
 			activeIdx = len(labels) - 1
 		}
-	}
-
-	labels = append(labels, "Combined")
-	if m.showCombined && !m.searchActive {
-		activeIdx = len(labels) - 1
 	}
 
 	if m.searchActive {
@@ -3458,7 +3476,7 @@ func (m TUIModel) renderMenu() string {
 	var result strings.Builder
 	result.WriteString(borderStyle.Render(b.String()))
 	result.WriteString("\n")
-	result.WriteString(" " + HintStyle.Render("Enter: select | Esc: close"))
+	result.WriteString(" " + HintStyle.Render("Enter: select | Esc: exit"))
 
 	return result.String()
 }
@@ -3801,12 +3819,15 @@ func RunMultiRepoTUI(
 
 	model := NewTUIModel(stats, links, tags, domains, firstRepo.Owner, firstRepo.Name, database, tableType, totalCommits, false)
 
-	// Set up multi-repo state
+	// Set up multi-repo state - start on Combined tab (home)
 	model.repos = repos
-	model.currentRepoIndex = 0
-	model.showCombined = false
+	model.currentRepoIndex = -1 // No individual repo selected
+	model.showCombined = true
 	model.token = token
 	model.dbPath = dbPath
+	model.switchToCombined()      // Load combined stats
+	model.repoViewVisible = false // Start at menu (home), not repo view
+	model.menuVisible = true      // Enable menu input handling at startup
 
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
@@ -3861,15 +3882,18 @@ func formatProviderName(provider string) string {
 }
 
 // openURL opens a URL in the default browser (cross-platform)
-func openURL(url string) error {
+func openURL(targetURL string) error {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
-		cmd = exec.Command("cmd", "/c", "start", url)
+		// Windows 'start' command requires:
+		// 1. An empty title ("") as first argument when URL contains special chars
+		// 2. The URL should NOT be additionally quoted - exec.Command handles escaping
+		cmd = exec.Command("cmd", "/c", "start", "", targetURL)
 	case "darwin":
-		cmd = exec.Command("open", url)
+		cmd = exec.Command("open", targetURL)
 	default: // linux, freebsd, etc.
-		cmd = exec.Command("xdg-open", url)
+		cmd = exec.Command("xdg-open", targetURL)
 	}
 	return cmd.Start()
 }
