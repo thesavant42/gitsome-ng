@@ -136,6 +136,9 @@ func main() {
 			// Check if we have tracked repos - if so, launch multi-repo TUI
 			trackedRepos, err := database.GetTrackedRepos()
 			if err == nil && len(trackedRepos) > 0 {
+				// Clear screen before launching main TUI (fixes ghost flash from alt-screen transition)
+				fmt.Print("\033[H\033[2J")
+
 				// Launch multi-repo TUI
 				result, err := ui.RunMultiRepoTUI(trackedRepos, database, "Committers", token, selectedDBPath)
 				if err != nil {

@@ -137,9 +137,7 @@ func NewWaybackModel(logger *log.Logger, database *db.DB) WaybackModel {
 	ti.Placeholder = "Enter domain (e.g., playground.bfl.ai)"
 	ti.Focus()
 	ti.CharLimit = 200
-	// Style text input to match app theme (white text, not yellow)
-	ti.TextStyle = NormalStyle
-	ti.PromptStyle = NormalStyle
+	// Use default textinput styles - Charm component requires lipgloss.Style
 
 	layout := DefaultLayout()
 

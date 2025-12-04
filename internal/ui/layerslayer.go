@@ -1,5 +1,9 @@
 package ui
 
+// LIPGLOSS-FREE: This file uses centralized styles from styles.go
+// All lipgloss usage has been moved to styles.go per the style guide.
+// DO NOT add lipgloss import here.
+
 import (
 	"encoding/json"
 	"fmt"
@@ -12,7 +16,6 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh/spinner"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/thesavant42/gitsome-ng/internal/api"
 	"github.com/thesavant42/gitsome-ng/internal/db"
 )
@@ -1858,10 +1861,16 @@ func (m cachedImageTableModel) View() string {
 	// Table with full-width selection
 	contentBuilder.WriteString(renderTableWithFullWidthSelection(m.table, m.layout))
 
-	// Border around content using InnerWidth - let content determine height naturally
-	// Border uses InnerWidth for content, total width = ViewportWidth
+	// Calculate available height for border
+	availableHeight := m.layout.ViewportHeight - 4
+	if availableHeight < 10 {
+		availableHeight = 10
+	}
+
+	// Border around content using InnerWidth with proper height
 	borderedContent := BorderStyle.
 		Width(m.layout.InnerWidth).
+		Height(availableHeight).
 		Render(contentBuilder.String())
 
 	var result strings.Builder
@@ -2161,19 +2170,16 @@ type searchModel struct {
 func newSearchModel(database *db.DB) searchModel {
 	layout := DefaultLayout()
 
-	// Create empty list
+	// Create empty list with default delegate styles
+	// Note: Charm bubbles components require lipgloss.Style, so we use their defaults
 	delegate := list.NewDefaultDelegate()
-	delegate.Styles.SelectedTitle = SelectedStyle
-	delegate.Styles.SelectedDesc = DescStyle
-	delegate.Styles.NormalTitle = NormalStyle
-	delegate.Styles.NormalDesc = DescStyle
 
 	l := list.New([]list.Item{}, delegate, layout.InnerWidth-4, layout.TableHeight)
 	l.Title = "Search Cached Layers"
 	l.SetShowStatusBar(true)
 	l.SetShowHelp(true)
 	l.SetFilteringEnabled(false) // We do our own search
-	l.Styles.Title = TitleStyle
+	// Use default list title style - Charm component requires lipgloss.Style
 
 	return searchModel{
 		database:  database,
@@ -2294,9 +2300,16 @@ func (m searchModel) View() string {
 		}
 	}
 
-	// Border around content using InnerWidth - let content determine height naturally
+	// Calculate available height for border
+	availableHeight := m.layout.ViewportHeight - 4
+	if availableHeight < 10 {
+		availableHeight = 10
+	}
+
+	// Border around content using InnerWidth with proper height
 	borderedContent := BorderStyle.
 		Width(m.layout.InnerWidth).
+		Height(availableHeight).
 		Render(contentBuilder.String())
 
 	var result strings.Builder
@@ -2351,10 +2364,11 @@ type batchFetchCompleteMsg struct {
 }
 
 func newBatchFetchModel(client *api.RegistryClient, imageRef string, indices []int, layers []api.Layer, database *db.DB) batchFetchModel {
-	// Create spinner with red/white dots style
+	// Create spinner with dots style
+	// Note: Charm bubbles spinner.Style requires lipgloss.Style, so we use default
 	s := bubbleSpinner.New()
 	s.Spinner = bubbleSpinner.Dot
-	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("196")) // Red spinner
+	// Use default spinner style - Charm component requires lipgloss.Style
 
 	return batchFetchModel{
 		imageRef:       imageRef,

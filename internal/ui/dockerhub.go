@@ -266,9 +266,9 @@ func (m DockerHubSearchModel) View() string {
 	}
 
 	// Wrap in bordered box with BOTH width AND height (fixes Bug #5 - right side not visible)
-	// Border uses ViewportWidth (per style guide), content area = InnerWidth
+	// Border uses InnerWidth for consistency with other screens
 	borderedContent := BorderStyle.
-		Width(m.layout.ViewportWidth).
+		Width(m.layout.InnerWidth).
 		Height(availableHeight).
 		Render(contentBuilder.String())
 

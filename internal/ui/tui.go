@@ -3,7 +3,6 @@ package ui
 import (
 	"fmt"
 	"os/exec"
-	"regexp"
 	"runtime"
 	"strings"
 
@@ -15,16 +14,7 @@ import (
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
-	"github.com/charmbracelet/lipgloss"
 )
-
-// ANSI escape code regex for stripping embedded colors from Bubbles table output
-var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
-
-// stripANSI removes all ANSI escape codes from a string
-func stripANSI(s string) string {
-	return ansiRegex.ReplaceAllString(s, "")
-}
 
 // Message types for async operations
 
@@ -127,8 +117,11 @@ type TUIModel struct {
 	layout       Layout
 	columnWidths ColumnWidths
 
-	// Menu state (menu is now the HOME/default view)
-	menuVisible bool // NOTE: This flag is now for overlay menus WITHIN repo view, not the main menu
+	// View state flags:
+	// - menuVisible: controls Update() key handling (true = process menu keys, false = process table keys)
+	// - repoViewVisible: controls View() rendering (true = show repo view, false = show menu)
+	// These flags must stay synchronized to avoid UI inconsistencies.
+	menuVisible bool
 	menuCursor  int
 
 	// Repository view state (shown when user selects "View Repositories" from menu)
@@ -409,22 +402,8 @@ func NewTUIModel(
 		table.WithHeight(TableHeight),
 	)
 
-	// Apply styles using centralized colors from styles.go
-	s := table.DefaultStyles()
-	s.Header = s.Header.
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(ColorText).
-		BorderBottom(true).
-		Bold(true).
-		Foreground(ColorText)
-
-	// Note: Cell foreground is set in renderTableWithLinks to avoid conflicts with link colors
-	// Selection highlighting is handled in renderTableWithLinks for full-width bar
-	s.Selected = s.Selected.
-		Foreground(ColorText).
-		Background(lipgloss.NoColor{}).
-		Bold(false)
-
+	// Apply styles using centralized function from styles.go
+	s := GetMainTableStyles()
 	t.SetStyles(s)
 
 	// Build ordered domain list from map
@@ -2045,22 +2024,8 @@ func (m *TUIModel) rebuildTable() {
 		table.WithHeight(m.layout.TableHeight),
 	)
 
-	s := table.DefaultStyles()
-	s.Header = s.Header.
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(ColorText).
-		BorderBottom(true).
-		Bold(true).
-		Foreground(ColorText)
-
-	// CRITICAL: Do NOT set Background here - renderTableWithLinks() handles
-	// full-width selection background. Setting it here embeds ANSI codes that prevent
-	// the outer style's Width() from extending the background to full width.
-	s.Selected = s.Selected.
-		Foreground(ColorText).
-		Background(lipgloss.NoColor{}).
-		Bold(false)
-
+	// Apply styles using centralized function from styles.go
+	s := GetMainTableStyles()
 	t.SetStyles(s)
 
 	// Restore cursor position (clamped to valid range)
@@ -2946,9 +2911,16 @@ func (m TUIModel) renderRepoView() string {
 	row2Styled := HintStyle.Render(row2Text)
 	contentBuilder.WriteString(row2Styled)
 
-	// Border around content - no fixed height, shrinks to fit
+	// Calculate available height for border (same pattern as other screens)
+	availableHeight := m.layout.ViewportHeight - 2
+	if availableHeight < 15 {
+		availableHeight = 15
+	}
+
+	// Border around content - dynamic width and height to fill viewport
 	borderedContent := BorderStyle.
 		Width(m.layout.InnerWidth).
+		Height(availableHeight).
 		Render(contentBuilder.String())
 	b.WriteString(borderedContent)
 
@@ -3080,8 +3052,8 @@ func (m TUIModel) renderPageIndicator() string {
 	// Add active tab
 	activeRendered := activeStyle.Render(activeLabel)
 	parts = append(parts, activeRendered)
-	// Use lipgloss.Width() to get visible width (excludes ANSI codes)
-	usedWidth = lipgloss.Width(activeRendered)
+	// Use StringWidth() to get visible width (excludes ANSI codes)
+	usedWidth = StringWidth(activeRendered)
 
 	// Try adding tabs to the left and right
 	left, right := activeIdx-1, activeIdx+1
@@ -3089,7 +3061,7 @@ func (m TUIModel) renderPageIndicator() string {
 		// Try left
 		if left >= 0 {
 			rendered := inactiveStyle.Render(labels[left])
-			w := lipgloss.Width(rendered) + 1 // +1 for space
+			w := StringWidth(rendered) + 1 // +1 for space
 			if usedWidth+w <= availableForTabs {
 				parts = append([]string{rendered}, parts...)
 				usedWidth += w
@@ -3101,7 +3073,7 @@ func (m TUIModel) renderPageIndicator() string {
 		// Try right
 		if right < len(labels) {
 			rendered := inactiveStyle.Render(labels[right])
-			w := lipgloss.Width(rendered) + 1 // +1 for space
+			w := StringWidth(rendered) + 1 // +1 for space
 			if usedWidth+w <= availableForTabs {
 				parts = append(parts, rendered)
 				usedWidth += w
@@ -3114,7 +3086,7 @@ func (m TUIModel) renderPageIndicator() string {
 
 	// Join tabs with spaces
 	tabsStr := strings.Join(parts, " ")
-	tabsWidth := lipgloss.Width(tabsStr) // Use lipgloss.Width() to get visible width
+	tabsWidth := StringWidth(tabsStr) // Use StringWidth() to get visible width
 
 	// Calculate padding
 	padding := availableForTabs - tabsWidth
@@ -3222,8 +3194,14 @@ func (m TUIModel) renderFetchPrompt() string {
 
 	b.WriteString("Fetch commits from GitHub API?")
 
-	// Add border with width from layout (InnerWidth so total = ViewportWidth)
-	borderStyle := BorderStyle.Width(m.layout.InnerWidth).MarginTop(1)
+	// Calculate available height for border (Bug #16 fix - was missing height)
+	availableHeight := m.layout.ViewportHeight - 4
+	if availableHeight < 10 {
+		availableHeight = 10
+	}
+
+	// Add border with width AND height from layout (Bug #16 fix)
+	borderStyle := BorderStyle.Width(m.layout.InnerWidth).Height(availableHeight).MarginTop(1)
 
 	var result strings.Builder
 	result.WriteString(borderStyle.Render(b.String()))
@@ -3256,9 +3234,16 @@ func (m TUIModel) renderQueryProgress() string {
 	}
 	b.WriteString("\n")
 
-	// Add border with width from layout (InnerWidth so total = ViewportWidth)
+	// Calculate available height for border (Bug #17 fix - was missing height)
+	availableHeight := m.layout.ViewportHeight - 4
+	if availableHeight < 10 {
+		availableHeight = 10
+	}
+
+	// Add border with width AND height from layout (Bug #17 fix)
 	borderStyle := BorderStyle.
 		Width(m.layout.InnerWidth).
+		Height(availableHeight).
 		MarginTop(1)
 
 	return borderStyle.Render(b.String())
@@ -3436,8 +3421,14 @@ func (m TUIModel) renderFetchProgress() string {
 		b.WriteString("\n")
 	}
 
-	// Add border with width from layout (InnerWidth so total = ViewportWidth)
-	borderStyle := BorderStyle.Width(m.layout.InnerWidth)
+	// Calculate available height for border (Bug #18 fix - was missing height)
+	availableHeight := m.layout.ViewportHeight - 4
+	if availableHeight < 10 {
+		availableHeight = 10
+	}
+
+	// Add border with width AND height from layout (Bug #18 fix)
+	borderStyle := BorderStyle.Width(m.layout.InnerWidth).Height(availableHeight)
 
 	return borderStyle.Render(b.String())
 }
@@ -3493,16 +3484,14 @@ func (m TUIModel) renderDomainConfig() string {
 		b.WriteString("\n")
 	} else {
 		for i, domain := range m.domainList {
-			domainStyle := AccentStyle
-
-			prefix := "  "
 			if i == m.domainCursor {
-				prefix = "> "
-				domainStyle = SelectedStyle
+				// Selected row - use full-width selector style
+				b.WriteString(SelectedStyle.Width(m.layout.InnerWidth).Render("> " + domain))
+			} else {
+				// Normal row - use accent style
+				b.WriteString("  ")
+				b.WriteString(AccentStyle.Render(domain))
 			}
-
-			b.WriteString(prefix)
-			b.WriteString(domainStyle.Render(domain))
 			b.WriteString("\n")
 		}
 	}
@@ -3704,40 +3693,31 @@ func (m TUIModel) renderTableWithLinks() string {
 		}
 
 		// Check if pending (yellow background)
-		// NOTE: lipgloss used ONLY for colorizing existing row text, not building structure
+		// Uses centralized helper function from styles.go
 		if pendingEmails[email] {
 			cleanLine := stripANSI(line)
-			style := lipgloss.NewStyle().
-				Foreground(ColorBlack).
-				Background(ColorAccentDim).
-				Width(m.layout.InnerWidth)
-			result = append(result, style.Render(cleanLine))
+			result = append(result, RenderPendingRow(cleanLine, m.layout.InnerWidth))
 			continue
 		}
 
 		// Check if linked (colored text) - links have highest priority
-		// NOTE: lipgloss used ONLY for colorizing existing row text
+		// Uses centralized helper function from styles.go
 		if groupID, ok := m.links[email]; ok {
-			colorIdx := (groupID - 1) % len(linkColors)
-			color := linkColors[colorIdx]
-			style := lipgloss.NewStyle().Foreground(color)
-			result = append(result, style.Render(line))
+			result = append(result, RenderLinkedRow(line, groupID))
 			continue
 		}
 
 		// Check if email domain matches a highlight domain
-		// NOTE: lipgloss used ONLY for colorizing existing row text
+		// Uses centralized helper function from styles.go
 		domain := extractDomain(email)
 		if _, ok := m.highlightDomains[domain]; ok {
-			style := lipgloss.NewStyle().Foreground(ColorAccent)
-			result = append(result, style.Render(line))
+			result = append(result, RenderDomainRow(line))
 			continue
 		}
 
 		// Apply bright white to non-highlighted rows
-		// NOTE: lipgloss used ONLY for colorizing existing row text
-		style := lipgloss.NewStyle().Foreground(ColorText)
-		result = append(result, style.Render(line))
+		// Uses centralized helper function from styles.go
+		result = append(result, RenderNormalRow(line))
 	}
 
 	return strings.Join(result, "\n")

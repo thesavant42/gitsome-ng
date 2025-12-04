@@ -1,61 +1,20 @@
 package ui
 
+// LIPGLOSS-FREE: This file uses centralized styles from styles.go
+// All lipgloss usage has been moved to styles.go per the style guide.
+// DO NOT add lipgloss import here.
+
 import (
 	"fmt"
 	"strings"
 
 	"github.com/thesavant42/gitsome-ng/internal/models"
-
-	"github.com/charmbracelet/lipgloss"
-)
-
-var (
-	// Color palette
-	purple = lipgloss.Color("99")  // for borders
-	pink   = lipgloss.Color("205") // for header text
-	cyan   = lipgloss.Color("86")
-	white  = lipgloss.Color("255")
-	green  = lipgloss.Color("82")
-	yellow = lipgloss.Color("220")
-
-	// Styles
-	titleStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(pink).
-			MarginBottom(1)
-
-	subtitleStyle = lipgloss.NewStyle().
-			Foreground(cyan).
-			MarginBottom(1)
-
-	headerStyle = lipgloss.NewStyle().
-			Foreground(pink).
-			Bold(true).
-			Align(lipgloss.Center)
-
-	cellStyle = lipgloss.NewStyle().
-			Padding(0, 1)
-
-	oddRowStyle = cellStyle.Foreground(white)
-
-	evenRowStyle = cellStyle.Foreground(white)
-
-	statStyle = lipgloss.NewStyle().
-			Foreground(green).
-			Bold(true)
-
-	borderStyle = lipgloss.NewStyle().
-			Foreground(purple)
-
-	highlightStyle = cellStyle.
-			Foreground(yellow).
-			Bold(true)
 )
 
 // PrintHeader prints a styled header for the report
 func PrintHeader(owner, repo string, totalCommits int) {
-	header := titleStyle.Render(fmt.Sprintf("Commit Statistics for %s/%s", owner, repo))
-	stats := subtitleStyle.Render(fmt.Sprintf("Total Commits: %s", statStyle.Render(fmt.Sprintf("%d", totalCommits))))
+	header := ReportTitleStyle.Render(fmt.Sprintf("Commit Statistics for %s/%s", owner, repo))
+	stats := ReportSubtitleStyle.Render(fmt.Sprintf("Total Commits: %s", ReportStatStyle.Render(fmt.Sprintf("%d", totalCommits))))
 
 	fmt.Println()
 	fmt.Println(header)
@@ -65,20 +24,20 @@ func PrintHeader(owner, repo string, totalCommits int) {
 
 // PrintContributorTable prints a styled table of contributor statistics
 //
-// CORRECT LIPGLOSS USAGE: This is a CLI report (non-interactive), so we use manual
-// formatting with strings. Lipgloss is used ONLY for colors/styling the output text.
+// CORRECT STYLE USAGE: This is a CLI report (non-interactive), so we use manual
+// formatting with strings. Styles from styles.go are used ONLY for colors/styling the output text.
 // We DO NOT use lipgloss to build table structure - we use string formatting instead.
 //
 // For interactive TUI tables, use bubbles/table component (see internal/ui/tui.go).
 // See docs/LIPGLOSS_FORBIDDEN_PATTERNS.md for forbidden patterns.
 func PrintContributorTable(title string, stats []models.ContributorStats, highlight string) {
 	if len(stats) == 0 {
-		fmt.Println(subtitleStyle.Render(title + ": No data"))
+		fmt.Println(ReportSubtitleStyle.Render(title + ": No data"))
 		return
 	}
 
 	// Print section title
-	fmt.Println(titleStyle.Render(title))
+	fmt.Println(ReportTitleStyle.Render(title))
 
 	// Track which rows should be highlighted
 	highlightRows := make(map[int]bool)
@@ -106,7 +65,7 @@ func PrintContributorTable(title string, stats []models.ContributorStats, highli
 	separator := strings.Repeat("─", totalWidth-2) // -2 for corner chars
 
 	// Print top border
-	fmt.Println(borderStyle.Render("┌" + separator + "┐"))
+	fmt.Println(ReportBorderStyle.Render("┌" + separator + "┐"))
 
 	// Print header
 	headerRow := fmt.Sprintf("│ %-*s │ %-*s │ %-*s │ %-*s │ %-*s │ %-*s │",
@@ -116,10 +75,10 @@ func PrintContributorTable(title string, stats []models.ContributorStats, highli
 		colWidths[3], "Email",
 		colWidths[4], "Commits",
 		colWidths[5], "%")
-	fmt.Println(headerStyle.Render(headerRow))
+	fmt.Println(ReportHeaderStyle.Render(headerRow))
 
 	// Print separator line
-	fmt.Println(borderStyle.Render("├" + separator + "┤"))
+	fmt.Println(ReportBorderStyle.Render("├" + separator + "┤"))
 
 	// Print rows
 	for i, s := range stats {
@@ -154,53 +113,41 @@ func PrintContributorTable(title string, stats []models.ContributorStats, highli
 
 		// Apply styling based on highlight/row type
 		if highlightRows[i] {
-			fmt.Println(highlightStyle.Render(rowText))
-		} else if i%2 == 0 {
-			fmt.Println(evenRowStyle.Render(rowText))
+			fmt.Println(ReportHighlightStyle.Render(rowText))
 		} else {
-			fmt.Println(oddRowStyle.Render(rowText))
+			// Use same style for all non-highlighted rows
+			fmt.Println(ReportRowStyle.Render(rowText))
 		}
 	}
 
 	// Print bottom border
-	fmt.Println(borderStyle.Render("└" + separator + "┘"))
+	fmt.Println(ReportBorderStyle.Render("└" + separator + "┘"))
 	fmt.Println()
 }
 
 // PrintProgress prints a progress message during fetch
 func PrintProgress(fetched, page int) {
-	progressStyle := lipgloss.NewStyle().Foreground(yellow)
-	fmt.Printf("\r%s", progressStyle.Render(fmt.Sprintf("Fetching commits... Page %d (%d commits)", page, fetched)))
+	fmt.Printf("\r%s", ReportProgressStyle.Render(fmt.Sprintf("Fetching commits... Page %d (%d commits)", page, fetched)))
 }
 
 // PrintSuccess prints a success message
 func PrintSuccess(message string) {
-	successStyle := lipgloss.NewStyle().
-		Foreground(green).
-		Bold(true)
-	fmt.Println(successStyle.Render(message))
+	fmt.Println(ReportSuccessStyle.Render(message))
 }
 
 // PrintError prints an error message
 func PrintError(message string) {
-	errorStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("196")).
-		Bold(true)
-	fmt.Println(errorStyle.Render("Error: " + message))
+	fmt.Println(ReportErrorStyle.Render("Error: " + message))
 }
 
 // PrintSummary prints a brief summary after the tables
 func PrintSummary(committerCount, authorCount, totalCommits int) {
-	summaryStyle := lipgloss.NewStyle().
-		Foreground(cyan).
-		Italic(true)
-
 	summary := fmt.Sprintf(
 		"Summary: %d unique committers, %d unique authors across %d commits",
 		committerCount, authorCount, totalCommits,
 	)
 
-	fmt.Println(summaryStyle.Render(summary))
+	fmt.Println(ReportSummaryStyle.Render(summary))
 	fmt.Println()
 }
 

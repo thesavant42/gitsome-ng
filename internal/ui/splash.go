@@ -90,9 +90,16 @@ func (m SplashModel) View() string {
 	b.WriteString(banner)
 	b.WriteString("\n")
 
-	// Wrap in red bordered box
+	// Calculate available height for splash content
+	availableHeight := layout.ViewportHeight - 4
+	if availableHeight < 10 {
+		availableHeight = 10
+	}
+
+	// Wrap in red bordered box with proper height
 	borderedContent := BorderStyle.
 		Width(layout.InnerWidth).
+		Height(availableHeight).
 		Render(b.String())
 
 	return borderedContent

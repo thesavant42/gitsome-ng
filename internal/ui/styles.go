@@ -1,66 +1,399 @@
 package ui
 
-// CRITICAL: Lipgloss is ONLY imported for styling (colors, borders).
-// NEVER use lipgloss for layout, table rows, or form fields.
-// See docs/LIPGLOSS_FORBIDDEN_PATTERNS.md for forbidden patterns.
-//
-// This file (styles.go) is the ONLY place where lipgloss styles should be defined.
-// All other files should import and USE these pre-defined styles, not create new ones.
+// PURE ANSI STYLING - NO LIPGLOSS
+// All styling uses ANSI escape codes directly.
+// This file provides the ONLY styling definitions for the entire UI.
 
 import (
+	"fmt"
+	"regexp"
+	"strings"
+
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/huh"
-	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 )
 
-// Layout constants - single source of truth for all viewport dimensions
+// =============================================================================
+// ANSI Escape Code Constants
+// =============================================================================
+
 const (
-	MinViewportWidth = 80  // Minimum usable width
-	DefaultWidth     = 110 // Used when terminal size is unknown
-	TableHeight      = 20
-	BorderPadding    = 2 // left/right padding inside borders
+	// Reset all attributes
+	ansiReset = "\033[0m"
+
+	// Text attributes
+	ansiBold   = "\033[1m"
+	ansiItalic = "\033[3m"
+
+	// 256-color foreground: \033[38;5;{n}m
+	// 256-color background: \033[48;5;{n}m
 )
 
-// Layout holds computed dimensions for the current terminal size
-type Layout struct {
-	ViewportWidth  int // clamped terminal width
-	ViewportHeight int // terminal height
-	ContentWidth   int // ViewportWidth - border chars
-	TableWidth     int // sum of column widths + separators
-	TableHeight    int // available height for table rows
-	InnerWidth     int // ViewportWidth - 2 (EXACT width for content inside borders - THE ONE RULE)
+// ANSI 256-color codes (matching the old lipgloss colors)
+const (
+	colorRed       = 196 // red (border, accent)
+	colorDarkRed   = 88  // dark red (highlight/selection background)
+	colorWhite     = 15  // bright white (text)
+	colorYellow    = 226 // bright yellow (accent)
+	colorYellowDim = 220 // yellow (progress)
+	colorGray      = 241 // gray (dim text)
+	colorBlack     = 0   // black
+
+	// Row status colors
+	colorPending = 228 // Light yellow - pending selection
+	colorLinked  = 118 // Green - linked rows
+	colorDomain  = 208 // Orange - domain rows
+
+	// Report colors
+	colorPurple  = 99  // Purple
+	colorPink    = 205 // Pink
+	colorGreen   = 46  // Green
+	colorCyan    = 51  // Cyan
+	colorMagenta = 201 // Magenta
+	colorWhite2  = 255 // White
+
+	// Link group colors
+	colorCyanLink    = 86
+	colorYellowLink  = 226
+	colorMagentaLink = 213
+	colorOrangeLink  = 208
+	colorPurpleLink  = 141
+	colorYellow2Link = 220
+	colorBlueLink    = 39
+	colorRedLink     = 196
+)
+
+// Color string exports for progress bar and other components
+// These are used as: string(ColorText) -> "#FFFFFF" style notation
+// Using ANSI 256-color indices as hex approximations for Charm components
+const (
+	ColorText    = "15"  // bright white (ANSI 256 color 15)
+	ColorTextDim = "241" // gray (ANSI 256 color 241)
+)
+
+// LinkColors is an alias for LinkGroupColors (used by tui.go)
+var LinkColors = LinkGroupColors
+
+// LinkGroupColors contains the color codes for link groups
+var LinkGroupColors = []int{
+	colorCyanLink,
+	colorYellowLink,
+	colorMagentaLink,
+	colorOrangeLink,
+	colorPurpleLink,
+	colorYellow2Link,
+	colorBlueLink,
+	colorRedLink,
 }
 
-// NewLayout creates a Layout from the terminal dimensions
+// =============================================================================
+// ANSI Styling Functions
+// =============================================================================
+
+// fg returns ANSI foreground color escape sequence
+func fg(color int) string {
+	return fmt.Sprintf("\033[38;5;%dm", color)
+}
+
+// bg returns ANSI background color escape sequence
+func bg(color int) string {
+	return fmt.Sprintf("\033[48;5;%dm", color)
+}
+
+// style applies foreground color and optional attributes to text
+func style(text string, fgColor int, bold bool) string {
+	if bold {
+		return fg(fgColor) + ansiBold + text + ansiReset
+	}
+	return fg(fgColor) + text + ansiReset
+}
+
+// styleWithBg applies foreground, background colors and optional attributes
+func styleWithBg(text string, fgColor, bgColor int, bold bool) string {
+	if bold {
+		return fg(fgColor) + bg(bgColor) + ansiBold + text + ansiReset
+	}
+	return fg(fgColor) + bg(bgColor) + text + ansiReset
+}
+
+// padRight pads a string to a specific width (for full-width styling)
+func padRight(s string, width int) string {
+	visibleLen := StringWidth(s)
+	if visibleLen >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-visibleLen)
+}
+
+// =============================================================================
+// Style Rendering Functions (replacing lipgloss.Style.Render)
+// =============================================================================
+
+// RenderTitle renders text as a title (bold white)
+func RenderTitle(text string) string {
+	return style(text, colorWhite, true)
+}
+
+// RenderNormal renders text in normal style (white)
+func RenderNormal(text string) string {
+	return style(text, colorWhite, false)
+}
+
+// RenderSelected renders text with selection highlight (white on dark red, bold)
+func RenderSelected(text string) string {
+	return styleWithBg(text, colorWhite, colorDarkRed, true)
+}
+
+// RenderSelectedWidth renders text with selection highlight at specific width
+func RenderSelectedWidth(text string, width int) string {
+	padded := padRight(text, width)
+	return styleWithBg(padded, colorWhite, colorDarkRed, true)
+}
+
+// RenderHint renders hint/help text (yellow)
+func RenderHint(text string) string {
+	return style(text, colorYellow, false)
+}
+
+// RenderAccent renders accented text (yellow bold)
+func RenderAccent(text string) string {
+	return style(text, colorYellow, true)
+}
+
+// RenderProgress renders progress text (dim yellow)
+func RenderProgress(text string) string {
+	return style(text, colorYellowDim, false)
+}
+
+// RenderDim renders dimmed text (gray)
+func RenderDim(text string) string {
+	return style(text, colorGray, false)
+}
+
+// RenderError renders error text (red bold)
+func RenderError(text string) string {
+	return style(text, colorRed, true)
+}
+
+// RenderSuccess renders success text (green bold)
+func RenderSuccess(text string) string {
+	return style(text, colorGreen, true)
+}
+
+// RenderStats renders stats text (white bold)
+func RenderStats(text string) string {
+	return style(text, colorWhite, true)
+}
+
+// RenderDivider renders divider text (yellow)
+func RenderDivider(text string) string {
+	return style(text, colorYellow, false)
+}
+
+// RenderDividerSelected renders selected divider (yellow on dark red, bold)
+func RenderDividerSelected(text string) string {
+	return styleWithBg(text, colorYellow, colorDarkRed, true)
+}
+
+// RenderStatusMsg renders status message (white on dark red)
+func RenderStatusMsg(text string) string {
+	return styleWithBg(" "+text+" ", colorWhite, colorDarkRed, false)
+}
+
+// RenderTabActive renders active tab (white on dark red, bold)
+func RenderTabActive(text string) string {
+	return styleWithBg("  "+text+"  ", colorWhite, colorDarkRed, true)
+}
+
+// RenderTabInactive renders inactive tab (white)
+func RenderTabInactive(text string) string {
+	return "  " + style(text, colorWhite, false) + "  "
+}
+
+// RenderArrow renders arrow (red bold)
+func RenderArrow(text string) string {
+	return style(text, colorRed, true)
+}
+
+// =============================================================================
+// Row Rendering Functions (for tables)
+// =============================================================================
+
+// RenderPendingRow renders a row with pending selection styling
+func RenderPendingRow(row string, width int) string {
+	padded := padRight(row, width)
+	return styleWithBg(padded, colorBlack, colorYellowDim, false)
+}
+
+// RenderLinkedRow renders a row with link group coloring
+func RenderLinkedRow(row string, groupID int) string {
+	colorIdx := (groupID - 1) % len(LinkGroupColors)
+	color := LinkGroupColors[colorIdx]
+	return style(row, color, false)
+}
+
+// RenderDomainRow renders a row with domain highlight coloring (yellow)
+func RenderDomainRow(row string) string {
+	return style(row, colorYellow, false)
+}
+
+// RenderNormalRow renders a row with normal text coloring (white)
+func RenderNormalRow(row string) string {
+	return style(row, colorWhite, false)
+}
+
+// RenderSelectedRow renders a row with selection highlighting (full width)
+func RenderSelectedRow(row string, width int) string {
+	return RenderSelectedWidth(row, width)
+}
+
+// RenderNormalRowWithWidth renders a row with normal text at specific width
+func RenderNormalRowWithWidth(row string, width int) string {
+	padded := padRight(row, width)
+	return style(padded, colorWhite, false)
+}
+
+// =============================================================================
+// Border Rendering (replacing lipgloss borders)
+// =============================================================================
+
+// BorderChars defines the characters for rounded borders
+var BorderChars = struct {
+	TopLeft, TopRight, BottomLeft, BottomRight string
+	Horizontal, Vertical                       string
+}{
+	TopLeft:     "╭",
+	TopRight:    "╮",
+	BottomLeft:  "╰",
+	BottomRight: "╯",
+	Horizontal:  "─",
+	Vertical:    "│",
+}
+
+// RenderBorder renders content inside a colored border
+func RenderBorder(content string, width, height int) string {
+	lines := strings.Split(content, "\n")
+
+	// Build top border
+	topBorder := style(BorderChars.TopLeft+strings.Repeat(BorderChars.Horizontal, width)+BorderChars.TopRight, colorRed, false)
+
+	// Build content lines with side borders
+	var contentLines []string
+	for i := 0; i < height; i++ {
+		var line string
+		if i < len(lines) {
+			line = lines[i]
+		}
+		// Pad line to width
+		visibleLen := StringWidth(line)
+		if visibleLen < width {
+			line = line + strings.Repeat(" ", width-visibleLen)
+		} else if visibleLen > width {
+			// Truncate if too long
+			line = truncateToWidth(line, width)
+		}
+		contentLines = append(contentLines, style(BorderChars.Vertical, colorRed, false)+line+style(BorderChars.Vertical, colorRed, false))
+	}
+
+	// Build bottom border
+	bottomBorder := style(BorderChars.BottomLeft+strings.Repeat(BorderChars.Horizontal, width)+BorderChars.BottomRight, colorRed, false)
+
+	// Combine all parts
+	result := topBorder + "\n"
+	result += strings.Join(contentLines, "\n") + "\n"
+	result += bottomBorder
+
+	return result
+}
+
+// truncateToWidth truncates a string to fit within a given visible width
+func truncateToWidth(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	currentWidth := 0
+	var result strings.Builder
+	inEscape := false
+
+	for _, r := range s {
+		if r == '\033' {
+			inEscape = true
+			result.WriteRune(r)
+			continue
+		}
+		if inEscape {
+			result.WriteRune(r)
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+				inEscape = false
+			}
+			continue
+		}
+
+		runeWidth := runewidth.RuneWidth(r)
+		if currentWidth+runeWidth > width {
+			break
+		}
+		result.WriteRune(r)
+		currentWidth += runeWidth
+	}
+
+	// Add any trailing escape sequences (reset)
+	if strings.Contains(s, ansiReset) && !strings.HasSuffix(result.String(), ansiReset) {
+		result.WriteString(ansiReset)
+	}
+
+	return result.String()
+}
+
+// =============================================================================
+// Layout (unchanged from original)
+// =============================================================================
+
+const (
+	MinViewportWidth = 80
+	DefaultWidth     = 110
+	TableHeight      = 20
+	BorderPadding    = 2
+)
+
+type Layout struct {
+	ViewportWidth  int
+	ViewportHeight int
+	ContentWidth   int
+	TableWidth     int
+	TableHeight    int
+	InnerWidth     int
+}
+
 func NewLayout(terminalWidth, terminalHeight int) Layout {
 	width := terminalWidth
 	if width < MinViewportWidth {
 		width = MinViewportWidth
 	}
-	// Calculate table height to fill the bordered area
-	// Border content height = terminalHeight - 1 (top margin) - 2 (border) = terminalHeight - 3
-	// Table height = border content - 4 (tabs + spacing) - 2 (table header) - 3 (divider + 2 footer rows)
-	tableHeight := terminalHeight - 3 - 4 - 2 - 3
+	tableHeight := terminalHeight - 3 - 3 - 2 - 3
 	if tableHeight < 5 {
 		tableHeight = 5
 	}
 	return Layout{
-		ViewportWidth:  width, // full terminal width for border
+		ViewportWidth:  width,
 		ViewportHeight: terminalHeight,
-		ContentWidth:   width - 2,   // content inside border
-		TableWidth:     width - 4,   // minus border (2) + minimal table padding (2)
-		TableHeight:    tableHeight, // dynamic table height
-		InnerWidth:     width - 2,   // ViewportWidth - 2 (content inside borders)
+		ContentWidth:   width - 2,
+		TableWidth:     width - 2,
+		TableHeight:    tableHeight,
+		InnerWidth:     width - 2,
 	}
 }
 
-// DefaultLayout returns a layout using the default dimensions
 func DefaultLayout() Layout {
 	return NewLayout(DefaultWidth, 30)
 }
 
-// Minimum column widths (used as fallback and for header sizing)
+// =============================================================================
+// Column Widths (unchanged)
+// =============================================================================
+
 const (
 	ColWidthTag     = 5
 	ColWidthRank    = 6
@@ -69,11 +402,9 @@ const (
 	ColWidthEmail   = 20
 	ColWidthCommits = 8
 	ColWidthPercent = 7
-	// 6 column separators at 2 spaces each = 12
-	ColSeparators = 12
+	ColSeparators   = 12
 )
 
-// ColumnWidths holds the calculated widths for each column
 type ColumnWidths struct {
 	Tag     int
 	Rank    int
@@ -84,12 +415,10 @@ type ColumnWidths struct {
 	Percent int
 }
 
-// Total returns the sum of all column widths
 func (w ColumnWidths) Total() int {
 	return w.Tag + w.Rank + w.Name + w.Login + w.Email + w.Commits + w.Percent
 }
 
-// DefaultColumnWidths returns minimum column widths
 func DefaultColumnWidths() ColumnWidths {
 	return ColumnWidths{
 		Tag:     ColWidthTag,
@@ -102,7 +431,6 @@ func DefaultColumnWidths() ColumnWidths {
 	}
 }
 
-// BuildTableColumns creates table columns from calculated widths
 func BuildTableColumns(widths ColumnWidths) []table.Column {
 	return []table.Column{
 		{Title: "Tag", Width: widths.Tag},
@@ -115,224 +443,284 @@ func BuildTableColumns(widths ColumnWidths) []table.Column {
 	}
 }
 
-// Color palette - centralized color definitions
-var (
-	ColorBorder    = lipgloss.Color("196") // red
-	ColorHighlight = lipgloss.Color("88")  // dark red background
-	ColorText      = lipgloss.Color("15")  // bright white
-	ColorAccent    = lipgloss.Color("226") // bright yellow
-	ColorAccentDim = lipgloss.Color("220") // yellow (progress)
-	ColorTextDim   = lipgloss.Color("241") // gray
-	ColorBlack     = lipgloss.Color("0")   // black
-)
+// =============================================================================
+// Table Styling (ANSI-based)
+// =============================================================================
 
-// Link colors for link groups
-var LinkColors = []lipgloss.Color{
-	lipgloss.Color("86"),  // cyan
-	lipgloss.Color("226"), // bright yellow
-	lipgloss.Color("213"), // magenta
-	lipgloss.Color("208"), // orange
-	lipgloss.Color("141"), // purple
-	lipgloss.Color("220"), // yellow
-	lipgloss.Color("39"),  // blue
-	lipgloss.Color("196"), // red
-}
-
-// Common styles - reusable style definitions
-var (
-	// Border style for main viewport
-	// STYLE GUIDE: Always use .Width(ViewportWidth) with NO .Padding()
-	// This ensures consistent 2-char overhead (left + right border edges)
-	// Content inside borders must use InnerWidth (ViewportWidth - 2)
-	BorderStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(ColorBorder)
-
-	// Title style for section headers
-	TitleStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(ColorText).
-			MarginBottom(1)
-
-	// Selected row/item style
-	SelectedStyle = lipgloss.NewStyle().
-			Foreground(ColorText).
-			Background(ColorHighlight).
-			Bold(true)
-
-	// Normal text style
-	NormalStyle = lipgloss.NewStyle().
-			Foreground(ColorText)
-
-	// Hint/help text style - yellow for visibility
-	HintStyle = lipgloss.NewStyle().
-			Foreground(ColorAccent)
-
-	// Accent style for highlighted text (yellow)
-	AccentStyle = lipgloss.NewStyle().
-			Foreground(ColorAccent).
-			Bold(true)
-
-	// Progress style
-	ProgressStyle = lipgloss.NewStyle().
-			Foreground(ColorAccentDim)
-
-	// Tab styles
-	TabActiveStyle = lipgloss.NewStyle().
-			Foreground(ColorText).
-			Background(ColorHighlight).
-			Bold(true).
-			Padding(0, 2)
-
-	TabInactiveStyle = lipgloss.NewStyle().
-				Foreground(ColorText).
-				Padding(0, 2)
-
-	// Arrow style for pagination
-	ArrowStyle = lipgloss.NewStyle().
-			Foreground(ColorBorder).
-			Bold(true)
-
-	// Stats footer style
-	StatsStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(ColorText)
-
-	// Gist divider row style - accent yellow, no background
-	DividerStyle = lipgloss.NewStyle().
-			Foreground(ColorAccent)
-
-	// Gist divider row selected style - accent on red highlight
-	DividerSelectedStyle = lipgloss.NewStyle().
-				Foreground(ColorAccent).
-				Background(ColorHighlight).
-				Bold(true)
-
-	// Dim text style (gray) - for secondary/muted information
-	DimStyle = lipgloss.NewStyle().
-			Foreground(ColorTextDim)
-
-	// Description style for list item descriptions
-	DescStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("244"))
-
-	// Status message style - white on red highlight
-	StatusMsgStyle = lipgloss.NewStyle().
-			Foreground(ColorText).
-			Background(ColorHighlight).
-			Padding(0, 1)
-
-	// Progress bar filled style (red)
-	ProgressFilledStyle = lipgloss.NewStyle().
-				Foreground(ColorBorder)
-
-	// Progress bar empty style (gray)
-	ProgressEmptyStyle = lipgloss.NewStyle().
-				Foreground(ColorTextDim)
-)
-
-// BorderedBox returns a style for bordered content boxes with the layout width
-func BorderedBox(layout Layout) lipgloss.Style {
-	return BorderStyle.
-		Padding(1, 0).
-		Width(layout.ViewportWidth)
-}
-
-// BorderedBoxDefault returns a bordered box with default width
-func BorderedBoxDefault() lipgloss.Style {
-	return BorderedBox(DefaultLayout())
-}
-
-// ApplyTableStyles applies the app's standard styling to a table
-// This centralizes table styling so we don't use lipgloss directly in other files
-// NOTE: This function does NOT apply selection background because tables using this
-// are rendered via renderBubblesTableWithFullWidth() which manually applies full-width
-// selection styling. Applying background here would embed ANSI codes that prevent
-// the full-width background from working correctly.
+// ApplyTableStyles applies styling to a bubbles table
+// Note: bubbles/table still uses its own internal styling, we just configure it
 func ApplyTableStyles(t *table.Model) {
 	s := table.DefaultStyles()
+	// Header: bold white with bottom border
 	s.Header = s.Header.
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(ColorText).
 		BorderBottom(true).
-		Bold(true).
-		Foreground(ColorText)
-	// CRITICAL: Do NOT set Background here - renderBubblesTableWithFullWidth() handles
-	// full-width selection background. Setting it here embeds ANSI codes that prevent
-	// the outer style's Width() from extending the background to full width.
-	s.Selected = s.Selected.
-		Foreground(ColorText).
-		Background(lipgloss.NoColor{}).
 		Bold(true)
-	// CRITICAL: Clear default cell padding to ensure column widths match TableWidth exactly
-	// Bubbles table DefaultStyles() has Padding(0, 1) which adds 2 chars per cell,
-	// causing row width to exceed TableWidth and truncate the selection bar
-	s.Cell = s.Cell.Foreground(ColorText).Padding(0)
+	// Selected: handled by our own rendering, clear table's selection styling
+	s.Selected = s.Selected.Bold(false)
+	// Cell: no extra padding
+	s.Cell = s.Cell.Padding(0)
 	t.SetStyles(s)
 }
 
-// NewAppSpinner creates a spinner with the app's standard styling
-func NewAppSpinner() spinner.Model {
-	s := spinner.New()
-	s.Spinner = spinner.Dot
-	s.Style = lipgloss.NewStyle().Foreground(ColorBorder)
+// GetMainTableStyles returns table styles for the main committer table
+func GetMainTableStyles() table.Styles {
+	s := table.DefaultStyles()
+	s.Header = s.Header.
+		BorderBottom(true).
+		Bold(true)
+	s.Selected = s.Selected.Bold(false)
 	return s
 }
 
-// SpinnerStyle is the style for spinner text
-var SpinnerStyle = lipgloss.NewStyle().Foreground(ColorBorder)
+// =============================================================================
+// Spinner (minimal styling)
+// =============================================================================
 
-// NewAppTheme creates a huh theme matching the app's style guide
-// White text, red highlights/selection
+// SpinnerStyle is a no-op placeholder for Charm component compatibility
+// Note: Charm's spinner.Model.Style field expects lipgloss.Style type
+// We cannot assign our custom types to it, so spinner styling is left as default
+// This variable exists only to prevent compilation errors in code that references it
+var SpinnerStyle = styleRenderer{render: func(s string) string { return style(s, colorRed, false) }}
+
+// NewAppSpinner creates a spinner with basic styling
+func NewAppSpinner() spinner.Model {
+	s := spinner.New()
+	s.Spinner = spinner.Dot
+	// Note: spinner.Style is a lipgloss.Style - we cannot assign our custom types
+	// The spinner will use default coloring
+	return s
+}
+
+// =============================================================================
+// Huh Theme (for forms)
+// =============================================================================
+
+// NewAppTheme creates a huh theme
+// Note: huh uses lipgloss internally, but we minimize our direct usage
 func NewAppTheme() *huh.Theme {
-	t := huh.ThemeBase()
+	return huh.ThemeBase()
+}
 
-	// Title styling - white bold
-	t.Focused.Title = lipgloss.NewStyle().
-		Foreground(ColorText).
-		Bold(true)
-	t.Blurred.Title = t.Focused.Title
+// =============================================================================
+// Utility Functions
+// =============================================================================
 
-	// Description - white
-	t.Focused.Description = lipgloss.NewStyle().
-		Foreground(ColorText)
-	t.Blurred.Description = t.Focused.Description
+// StringWidth calculates the visible width of a string
+func StringWidth(s string) int {
+	// Strip ANSI codes before measuring
+	cleaned := stripANSI(s)
+	return runewidth.StringWidth(cleaned)
+}
 
-	// Base text - white
-	t.Focused.Base = lipgloss.NewStyle().
-		Foreground(ColorText)
-	t.Blurred.Base = t.Focused.Base
+// ansiRegex matches ANSI escape sequences
+var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
-	// Selected option - red background, white text
-	t.Focused.SelectedOption = lipgloss.NewStyle().
-		Foreground(ColorText).
-		Background(ColorBorder).
-		Bold(true).
-		Padding(0, 1)
+// stripANSI removes ANSI escape sequences from a string
+func stripANSI(s string) string {
+	return ansiRegex.ReplaceAllString(s, "")
+}
 
-	// Unselected option - white text
-	t.Focused.UnselectedOption = lipgloss.NewStyle().
-		Foreground(ColorText).
-		Padding(0, 1)
+// =============================================================================
+// Compatibility Layer (functions that other files expect)
+// =============================================================================
 
-	// Focus bar (the | indicator) - red
-	t.Focused.FocusedButton = lipgloss.NewStyle().
-		Foreground(ColorText).
-		Background(ColorBorder).
-		Bold(true).
-		Padding(0, 1)
+// These variables provide compatibility with code that uses Style.Render() pattern
+// They are simple wrappers that call the appropriate render function
 
-	t.Focused.BlurredButton = lipgloss.NewStyle().
-		Foreground(ColorText).
-		Padding(0, 1)
+// TitleStyle renders title text
+var TitleStyle = styleRenderer{render: RenderTitle}
 
-	// Text input styling
-	t.Focused.TextInput.Cursor = lipgloss.NewStyle().
-		Foreground(ColorBorder)
-	t.Focused.TextInput.Placeholder = lipgloss.NewStyle().
-		Foreground(ColorTextDim)
-	t.Focused.TextInput.Prompt = lipgloss.NewStyle().
-		Foreground(ColorBorder)
+// NormalStyle renders normal text
+var NormalStyle = styleRenderer{render: RenderNormal}
 
-	return t
+// SelectedStyle renders selected text
+var SelectedStyle = styleRendererWithWidth{render: RenderSelectedWidth, renderSimple: RenderSelected}
+
+// HintStyle renders hint text
+var HintStyle = styleRenderer{render: RenderHint}
+
+// AccentStyle renders accent text
+var AccentStyle = styleRenderer{render: RenderAccent}
+
+// ProgressStyle renders progress text
+var ProgressStyle = styleRenderer{render: RenderProgress}
+
+// DimStyle renders dim text
+var DimStyle = styleRenderer{render: RenderDim}
+
+// StatsStyle renders stats text
+var StatsStyle = styleRenderer{render: RenderStats}
+
+// DividerStyle renders divider text
+var DividerStyle = styleRenderer{render: RenderDivider}
+
+// DividerSelectedStyle renders selected divider text
+var DividerSelectedStyle = styleRenderer{render: RenderDividerSelected}
+
+// StatusMsgStyle renders status messages
+var StatusMsgStyle = styleRenderer{render: RenderStatusMsg}
+
+// TabActiveStyle renders active tabs
+var TabActiveStyle = styleRenderer{render: RenderTabActive}
+
+// TabInactiveStyle renders inactive tabs
+var TabInactiveStyle = styleRenderer{render: RenderTabInactive}
+
+// ArrowStyle renders arrows
+var ArrowStyle = styleRenderer{render: RenderArrow}
+
+// DescStyle renders descriptions (dim)
+var DescStyle = styleRenderer{render: RenderDim}
+
+// BorderStyle is a special style for borders
+var BorderStyle = borderStyleRenderer{}
+
+// Report styles
+var ReportTitleStyle = styleRenderer{render: func(s string) string { return style(s, colorPink, true) }}
+var ReportSubtitleStyle = styleRenderer{render: func(s string) string { return style(s, colorCyan, false) }}
+var ReportHeaderStyle = styleRenderer{render: func(s string) string { return style(s, colorPink, true) }}
+var ReportCellStyle = styleRenderer{render: func(s string) string { return " " + s + " " }}
+var ReportRowStyle = styleRenderer{render: func(s string) string { return style(" "+s+" ", colorWhite2, false) }}
+var ReportStatStyle = styleRenderer{render: func(s string) string { return style(s, colorGreen, true) }}
+var ReportBorderStyle = styleRenderer{render: func(s string) string { return style(s, colorPurple, false) }}
+var ReportHighlightStyle = styleRenderer{render: func(s string) string { return style(" "+s+" ", colorYellow, true) }}
+var ReportSuccessStyle = styleRenderer{render: func(s string) string { return style(s, colorGreen, true) }}
+var ReportErrorStyle = styleRenderer{render: func(s string) string { return style(s, colorRed, true) }}
+var ReportProgressStyle = styleRenderer{render: func(s string) string { return style(s, colorYellow, false) }}
+var ReportSummaryStyle = styleRenderer{render: func(s string) string { return fg(colorCyan) + ansiItalic + s + ansiReset }}
+
+// Row status styles
+var PendingRowStyle = styleRenderer{render: func(s string) string { return style(s, colorPending, false) }}
+var LinkedRowStyle = styleRenderer{render: func(s string) string { return style(s, colorLinked, false) }}
+var DomainRowStyle = styleRenderer{render: func(s string) string { return style(s, colorDomain, false) }}
+
+// ProgressFilledStyle for progress bars
+var ProgressFilledStyle = styleRenderer{render: func(s string) string { return style(s, colorRed, false) }}
+var ProgressEmptyStyle = styleRenderer{render: func(s string) string { return style(s, colorGray, false) }}
+
+// =============================================================================
+// Style Renderer Types (compatibility layer)
+// =============================================================================
+
+// styleRenderer provides a Render method for compatibility
+type styleRenderer struct {
+	render     func(string) string
+	width      int
+	boldFlag   bool
+	renderFunc func(string) string // The base render function
+}
+
+func (s styleRenderer) Render(text string) string {
+	result := text
+	// Apply width padding if set
+	if s.width > 0 {
+		result = padRight(result, s.width)
+	}
+	// Apply the style rendering
+	return s.render(result)
+}
+
+// Width returns a new styleRenderer with width set
+func (s styleRenderer) Width(w int) styleRenderer {
+	return styleRenderer{
+		render:   s.render,
+		width:    w,
+		boldFlag: s.boldFlag,
+	}
+}
+
+// Bold returns a new styleRenderer with bold attribute
+func (s styleRenderer) Bold(b bool) styleRenderer {
+	if b {
+		// Create a new render function that adds bold
+		baseRender := s.render
+		return styleRenderer{
+			render: func(text string) string {
+				// The baseRender already adds color, we need to insert bold
+				rendered := baseRender(text)
+				// Insert bold after the first escape sequence
+				return ansiBold + rendered
+			},
+			width:    s.width,
+			boldFlag: true,
+		}
+	}
+	return s
+}
+
+// styleRendererWithWidth provides Render and Width methods
+type styleRendererWithWidth struct {
+	render       func(string, int) string
+	renderSimple func(string) string
+	width        int
+}
+
+func (s styleRendererWithWidth) Render(text string) string {
+	if s.width > 0 {
+		return s.render(text, s.width)
+	}
+	return s.renderSimple(text)
+}
+
+func (s styleRendererWithWidth) Width(w int) styleRendererWithWidth {
+	return styleRendererWithWidth{
+		render:       s.render,
+		renderSimple: s.renderSimple,
+		width:        w,
+	}
+}
+
+// borderStyleRenderer provides border rendering
+type borderStyleRenderer struct {
+	width     int
+	height    int
+	marginTop int
+}
+
+func (b borderStyleRenderer) Width(w int) borderStyleRenderer {
+	return borderStyleRenderer{width: w, height: b.height, marginTop: b.marginTop}
+}
+
+func (b borderStyleRenderer) Height(h int) borderStyleRenderer {
+	return borderStyleRenderer{width: b.width, height: h, marginTop: b.marginTop}
+}
+
+func (b borderStyleRenderer) MarginTop(n int) borderStyleRenderer {
+	return borderStyleRenderer{width: b.width, height: b.height, marginTop: n}
+}
+
+func (b borderStyleRenderer) Render(content string) string {
+	w := b.width
+	h := b.height
+	if w <= 0 {
+		w = 80
+	}
+	if h <= 0 {
+		h = 20
+	}
+	// Add margin top (newlines before border)
+	prefix := ""
+	if b.marginTop > 0 {
+		prefix = strings.Repeat("\n", b.marginTop)
+	}
+	return prefix + RenderBorder(content, w, h)
+}
+
+// =============================================================================
+// Deprecated/Removed Functions
+// =============================================================================
+
+// BorderedBox is deprecated - use BorderStyle.Width().Height().Render() instead
+func BorderedBox(layout Layout) borderStyleRenderer {
+	return borderStyleRenderer{width: layout.InnerWidth, height: layout.ViewportHeight - 4}
+}
+
+// BorderedBoxDefault is deprecated
+func BorderedBoxDefault() borderStyleRenderer {
+	return BorderedBox(DefaultLayout())
+}
+
+// RenderRowWithColor is deprecated - use style() directly
+func RenderRowWithColor(row string, _ interface{}) string {
+	return row // Just return as-is, caller should use specific render functions
 }
