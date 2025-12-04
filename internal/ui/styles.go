@@ -31,7 +31,7 @@ const (
 	// 256-color background: \033[48;5;{n}m
 )
 
-// ANSI 256-color codes (matching the old lipgloss colors)
+// ANSI 256-color codes
 const (
 	colorRed       = 196 // red (border, accent)
 	colorDarkRed   = 88  // dark red (highlight/selection background)
@@ -128,7 +128,7 @@ func padRight(s string, width int) string {
 }
 
 // =============================================================================
-// Style Rendering Functions (replacing lipgloss.Style.Render)
+// Style Rendering Functions
 // =============================================================================
 
 // RenderTitle renders text as a title (bold white)
@@ -227,21 +227,24 @@ func RenderPendingRow(row string, width int) string {
 	return styleWithBg(padded, colorBlack, colorYellowDim, false)
 }
 
-// RenderLinkedRow renders a row with link group coloring
-func RenderLinkedRow(row string, groupID int) string {
+// RenderLinkedRow renders a row with link group coloring (full width)
+func RenderLinkedRow(row string, groupID int, width int) string {
 	colorIdx := (groupID - 1) % len(LinkGroupColors)
 	color := LinkGroupColors[colorIdx]
-	return style(row, color, false)
+	padded := padRight(row, width)
+	return style(padded, color, false)
 }
 
-// RenderDomainRow renders a row with domain highlight coloring (yellow)
-func RenderDomainRow(row string) string {
-	return style(row, colorYellow, false)
+// RenderDomainRow renders a row with domain highlight coloring (yellow, full width)
+func RenderDomainRow(row string, width int) string {
+	padded := padRight(row, width)
+	return style(padded, colorYellow, false)
 }
 
-// RenderNormalRow renders a row with normal text coloring (white)
-func RenderNormalRow(row string) string {
-	return style(row, colorWhite, false)
+// RenderNormalRow renders a row with normal text coloring (white, full width)
+func RenderNormalRow(row string, width int) string {
+	padded := padRight(row, width)
+	return style(padded, colorWhite, false)
 }
 
 // RenderSelectedRow renders a row with selection highlighting (full width)
@@ -256,7 +259,7 @@ func RenderNormalRowWithWidth(row string, width int) string {
 }
 
 // =============================================================================
-// Border Rendering (replacing lipgloss borders)
+// Border Rendering
 // =============================================================================
 
 // BorderChars defines the characters for rounded borders
@@ -455,10 +458,11 @@ func ApplyTableStyles(t *table.Model) {
 	s.Header = s.Header.
 		BorderBottom(true).
 		Bold(true)
-	// Selected: handled by our own rendering, clear table's selection styling
+	// Selected: CRITICAL - must have NO background or it interferes with manual selection
+	// Bubbles table has pink default, we strip it in renderTableWithFullWidthSelection via stripANSI
 	s.Selected = s.Selected.Bold(false)
-	// Cell: no extra padding
-	s.Cell = s.Cell.Padding(0)
+	// Cell: no extra padding, clear cell foreground
+	s.Cell = s.Cell.UnsetForeground().Padding(0)
 	t.SetStyles(s)
 }
 
@@ -468,7 +472,11 @@ func GetMainTableStyles() table.Styles {
 	s.Header = s.Header.
 		BorderBottom(true).
 		Bold(true)
+	// Selected: CRITICAL - must have NO background or it interferes with manual selection
+	// Bubbles table has pink default, we strip it in renderTableWithLinks via stripANSI
 	s.Selected = s.Selected.Bold(false)
+	// Cell: clear cell styling
+	s.Cell = s.Cell.UnsetForeground()
 	return s
 }
 
@@ -477,7 +485,7 @@ func GetMainTableStyles() table.Styles {
 // =============================================================================
 
 // SpinnerStyle is a no-op placeholder for Charm component compatibility
-// Note: Charm's spinner.Model.Style field expects lipgloss.Style type
+// Note: Charm's spinner.Model.Style field requires a specific Style type
 // We cannot assign our custom types to it, so spinner styling is left as default
 // This variable exists only to prevent compilation errors in code that references it
 var SpinnerStyle = styleRenderer{render: func(s string) string { return style(s, colorRed, false) }}
@@ -486,7 +494,7 @@ var SpinnerStyle = styleRenderer{render: func(s string) string { return style(s,
 func NewAppSpinner() spinner.Model {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
-	// Note: spinner.Style is a lipgloss.Style - we cannot assign our custom types
+	// Note: spinner.Style requires a specific type - we cannot assign our custom types
 	// The spinner will use default coloring
 	return s
 }
@@ -496,7 +504,6 @@ func NewAppSpinner() spinner.Model {
 // =============================================================================
 
 // NewAppTheme creates a huh theme
-// Note: huh uses lipgloss internally, but we minimize our direct usage
 func NewAppTheme() *huh.Theme {
 	return huh.ThemeBase()
 }

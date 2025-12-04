@@ -169,7 +169,7 @@ func (m ProjectSelectorModel) View() string {
 				if i == m.cursor {
 					b.WriteString(SelectedStyle.Width(layout.InnerWidth).Render("• " + displayName))
 				} else {
-					b.WriteString(NormalStyle.Render("• " + displayName))
+					b.WriteString(NormalStyle.Width(layout.InnerWidth).Render("• " + displayName))
 				}
 				b.WriteString("\n")
 			}
@@ -180,7 +180,7 @@ func (m ProjectSelectorModel) View() string {
 		if m.cursor == len(m.projects) {
 			b.WriteString(SelectedStyle.Width(layout.InnerWidth).Render("• Create New Project"))
 		} else {
-			b.WriteString(NormalStyle.Render("• Create New Project"))
+			b.WriteString(NormalStyle.Width(layout.InnerWidth).Render("• Create New Project"))
 		}
 		b.WriteString("\n")
 
@@ -188,7 +188,7 @@ func (m ProjectSelectorModel) View() string {
 		if m.cursor == len(m.projects)+1 {
 			b.WriteString(SelectedStyle.Width(layout.InnerWidth).Render("• Exit"))
 		} else {
-			b.WriteString(NormalStyle.Render("• Exit"))
+			b.WriteString(NormalStyle.Width(layout.InnerWidth).Render("• Exit"))
 		}
 		b.WriteString("\n")
 	}
@@ -196,7 +196,7 @@ func (m ProjectSelectorModel) View() string {
 	// Pad content to fill available height (account for border and help line)
 	content := b.String()
 	contentLines := strings.Count(content, "\n")
-	availableHeight := m.height - 4 // -2 for border top/bottom, -1 for help, -1 for margin
+	availableHeight := m.height - 7 // -3 header, -2 RenderBorder overhead, -2 footer
 	if contentLines < availableHeight {
 		content += strings.Repeat("\n", availableHeight-contentLines)
 	}

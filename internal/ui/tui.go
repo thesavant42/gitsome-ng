@@ -3097,9 +3097,11 @@ func (m TUIModel) renderPageIndicator() string {
 	// Build final string: exactly InnerWidth chars
 	var b strings.Builder
 
-	// Left arrow
+	// Left arrow - strip ANSI codes to get accurate width
+	leftArrow := ArrowStyle.Render("<")
+	leftArrowClean := stripANSI(leftArrow)
 	if activeIdx > 0 {
-		b.WriteString(ArrowStyle.Render("<"))
+		b.WriteString(leftArrow)
 	} else {
 		b.WriteString(" ")
 	}
@@ -3108,12 +3110,38 @@ func (m TUIModel) renderPageIndicator() string {
 	// Tabs
 	b.WriteString(tabsStr)
 
-	// Padding
-	b.WriteString(strings.Repeat(" ", padding))
+	// Calculate padding - account for arrow widths
+	// Left arrow takes 1 char (either arrow or space) + 1 space = 2 chars
+	// Right arrow takes 1 char (either arrow or space) = 1 char
+	// So total fixed width used by arrows and spacing: 3 chars
+	// Available for tabs + padding: availableForTabs
+	// But tabsWidth already accounts for the visible width of tabs
+	// So padding = availableForTabs - tabsWidth - (arrow widths)
+	arrowWidth := 0
+	if activeIdx > 0 {
+		arrowWidth += len(leftArrowClean) // Left arrow width
+	} else {
+		arrowWidth += 1 // Space instead of arrow
+	}
+	arrowWidth += 1 // Space after left arrow
+	if activeIdx < len(labels)-1 {
+		arrowWidth += len(stripANSI(ArrowStyle.Render(">"))) // Right arrow width
+	} else {
+		arrowWidth += 1 // Space instead of arrow
+	}
+
+	// Recalculate padding to account for arrow widths
+	actualPadding := availableForTabs - tabsWidth - arrowWidth
+	if actualPadding < 0 {
+		actualPadding = 0
+	}
+
+	b.WriteString(strings.Repeat(" ", actualPadding))
 
 	// Right arrow
+	rightArrow := ArrowStyle.Render(">")
 	if activeIdx < len(labels)-1 {
-		b.WriteString(ArrowStyle.Render(">"))
+		b.WriteString(rightArrow)
 	} else {
 		b.WriteString(" ")
 	}
@@ -3676,11 +3704,13 @@ func (m TUIModel) renderTableWithLinks() string {
 		dataRowIndex = i - 2
 
 		// Selector bar - use InnerWidth for full width
-		// CRITICAL: Strip ANSI codes first to prevent embedded reset codes from killing the background
-		// This matches the pattern used in renderBubblesTableWithFullWidth()
-		if dataRowIndex == cursor {
+		// Fix: offset by -1 to match cursor position
+		if dataRowIndex == cursor-1 {
+			// Strip ANSI codes first to prevent embedded reset codes from killing the background
 			cleanLine := stripANSI(line)
-			result = append(result, SelectedStyle.Width(m.layout.InnerWidth).Render(cleanLine))
+			// Apply style directly with correct width (like menu does)
+			styledLine := SelectedStyle.Width(m.layout.InnerWidth).Render(cleanLine)
+			result = append(result, styledLine)
 			continue
 		}
 
@@ -3703,7 +3733,7 @@ func (m TUIModel) renderTableWithLinks() string {
 		// Check if linked (colored text) - links have highest priority
 		// Uses centralized helper function from styles.go
 		if groupID, ok := m.links[email]; ok {
-			result = append(result, RenderLinkedRow(line, groupID))
+			result = append(result, RenderLinkedRow(line, groupID, m.layout.InnerWidth))
 			continue
 		}
 
@@ -3711,13 +3741,13 @@ func (m TUIModel) renderTableWithLinks() string {
 		// Uses centralized helper function from styles.go
 		domain := extractDomain(email)
 		if _, ok := m.highlightDomains[domain]; ok {
-			result = append(result, RenderDomainRow(line))
+			result = append(result, RenderDomainRow(line, m.layout.InnerWidth))
 			continue
 		}
 
 		// Apply bright white to non-highlighted rows
 		// Uses centralized helper function from styles.go
-		result = append(result, RenderNormalRow(line))
+		result = append(result, RenderNormalRow(line, m.layout.InnerWidth))
 	}
 
 	return strings.Join(result, "\n")
