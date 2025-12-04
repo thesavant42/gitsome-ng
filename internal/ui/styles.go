@@ -47,12 +47,11 @@ const (
 	colorDomain  = 208 // Orange - domain rows
 
 	// Report colors
-	colorPurple  = 99  // Purple
-	colorPink    = 205 // Pink
-	colorGreen   = 46  // Green
-	colorCyan    = 51  // Cyan
-	colorMagenta = 201 // Magenta
-	colorWhite2  = 255 // White
+	colorPurple = 99  // Purple
+	colorPink   = 205 // Pink
+	colorGreen  = 46  // Green
+	colorCyan   = 51  // Cyan
+	colorWhite2 = 255 // White
 
 	// Link group colors
 	colorCyanLink    = 86
@@ -277,10 +276,20 @@ var BorderChars = struct {
 
 // RenderBorder renders content inside a colored border
 func RenderBorder(content string, width, height int) string {
+	return renderBorderWithColor(content, width, height, colorRed)
+}
+
+// RenderBorderWhite renders content inside a white border
+func RenderBorderWhite(content string, width, height int) string {
+	return renderBorderWithColor(content, width, height, colorWhite)
+}
+
+// renderBorderWithColor renders content inside a border with specified color
+func renderBorderWithColor(content string, width, height int, borderColor int) string {
 	lines := strings.Split(content, "\n")
 
 	// Build top border
-	topBorder := style(BorderChars.TopLeft+strings.Repeat(BorderChars.Horizontal, width)+BorderChars.TopRight, colorRed, false)
+	topBorder := style(BorderChars.TopLeft+strings.Repeat(BorderChars.Horizontal, width)+BorderChars.TopRight, borderColor, false)
 
 	// Build content lines with side borders
 	var contentLines []string
@@ -297,11 +306,11 @@ func RenderBorder(content string, width, height int) string {
 			// Truncate if too long
 			line = truncateToWidth(line, width)
 		}
-		contentLines = append(contentLines, style(BorderChars.Vertical, colorRed, false)+line+style(BorderChars.Vertical, colorRed, false))
+		contentLines = append(contentLines, style(BorderChars.Vertical, borderColor, false)+line+style(BorderChars.Vertical, borderColor, false))
 	}
 
 	// Build bottom border
-	bottomBorder := style(BorderChars.BottomLeft+strings.Repeat(BorderChars.Horizontal, width)+BorderChars.BottomRight, colorRed, false)
+	bottomBorder := style(BorderChars.BottomLeft+strings.Repeat(BorderChars.Horizontal, width)+BorderChars.BottomRight, borderColor, false)
 
 	// Combine all parts
 	result := topBorder + "\n"
@@ -581,6 +590,60 @@ var DescStyle = styleRenderer{render: RenderDim}
 
 // BorderStyle is a special style for borders
 var BorderStyle = borderStyleRenderer{}
+
+// BorderStyleWhite is a special style for white borders
+var BorderStyleWhite = borderStyleRenderer{}
+
+// borderStyleRendererWithColor provides border rendering with custom color
+type borderStyleRendererWithColor struct {
+	width       int
+	height      int
+	marginTop   int
+	borderColor int
+}
+
+// Width sets the width for colored border
+func (b borderStyleRendererWithColor) Width(w int) borderStyleRendererWithColor {
+	return borderStyleRendererWithColor{width: w, height: b.height, marginTop: b.marginTop, borderColor: b.borderColor}
+}
+
+// Height sets the height for colored border
+func (b borderStyleRendererWithColor) Height(h int) borderStyleRendererWithColor {
+	return borderStyleRendererWithColor{width: b.width, height: h, marginTop: b.marginTop, borderColor: b.borderColor}
+}
+
+// MarginTop sets the margin top for colored border
+func (b borderStyleRendererWithColor) MarginTop(n int) borderStyleRendererWithColor {
+	return borderStyleRendererWithColor{width: b.width, height: b.height, marginTop: n, borderColor: b.borderColor}
+}
+
+// Render renders content with colored border
+func (b borderStyleRendererWithColor) Render(content string) string {
+	w := b.width
+	h := b.height
+	if w <= 0 {
+		w = 80
+	}
+	if h <= 0 {
+		h = 20
+	}
+	// Add margin top (newlines before border)
+	prefix := ""
+	if b.marginTop > 0 {
+		prefix = strings.Repeat("\n", b.marginTop)
+	}
+	return prefix + renderBorderWithColor(content, w, h, b.borderColor)
+}
+
+// NewBorderStyleWithColor creates a new border style with custom color
+func NewBorderStyleWithColor(borderColor int) borderStyleRendererWithColor {
+	return borderStyleRendererWithColor{
+		width:       0,
+		height:      0,
+		marginTop:   0,
+		borderColor: borderColor,
+	}
+}
 
 // Report styles
 var ReportTitleStyle = styleRenderer{render: func(s string) string { return style(s, colorPink, true) }}

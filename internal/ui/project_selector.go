@@ -193,28 +193,70 @@ func (m ProjectSelectorModel) View() string {
 		b.WriteString("\n")
 	}
 
-	// Pad content to fill available height (account for border and help line)
-	content := b.String()
-	contentLines := strings.Count(content, "\n")
-	availableHeight := m.height - 7 // -3 header, -2 RenderBorder overhead, -2 footer
-	if contentLines < availableHeight {
-		content += strings.Repeat("\n", availableHeight-contentLines)
-	}
+	// Get the main content
+	mainContent := b.String()
 
-	// Apply border with full width and height
-	borderedContent := BorderStyle.
-		Width(layout.InnerWidth).
-		Height(availableHeight).
-		Render(content)
-
-	// Build final view with help text below
+	// Build final view with two-box layout (only in select mode)
 	var result strings.Builder
-	result.WriteString(borderedContent)
 
-	// Add help text outside the border (only in select mode)
-	if !m.createMode {
-		result.WriteString("\n")
-		result.WriteString(" " + HintStyle.Render("up/down: navigate | Enter: select | q: quit"))
+	if m.createMode {
+		// Create mode: single box with current layout
+		contentLines := strings.Count(mainContent, "\n")
+		availableHeight := m.height - 7 // -3 header, -2 RenderBorder overhead, -2 footer
+		if contentLines < availableHeight {
+			mainContent += strings.Repeat("\n", availableHeight-contentLines)
+		}
+
+		// Apply border with full width and height
+		borderedContent := BorderStyle.
+			Width(layout.InnerWidth).
+			Height(availableHeight).
+			Render(mainContent)
+
+		result.WriteString(borderedContent)
+	} else {
+		// Select mode: two-box layout
+		// First box: main content (projects list)
+		mainContentLines := strings.Count(mainContent, "\n")
+		mainAvailableHeight := m.height - 10 // -3 header, -2 border overhead, -3 footer box, -2 spacing
+		if mainContentLines < mainAvailableHeight {
+			mainContent += strings.Repeat("\n", mainAvailableHeight-mainContentLines)
+		}
+
+		// Apply border to main content
+		mainBordered := BorderStyle.
+			Width(layout.InnerWidth).
+			Height(mainAvailableHeight).
+			Render(mainContent)
+
+		result.WriteString(mainBordered)
+		result.WriteString("\n") // Spacing between boxes
+
+		// Second box: help text (1 row high) - use white border like menu screen
+		helpText := "up/down: navigate | Enter: select | q: quit"
+		helpContent := HintStyle.Render(helpText)
+
+		// Create help box with centered text
+		textWidth := len(helpText)
+		padding := (layout.InnerWidth - textWidth) / 2
+		var helpBoxContent strings.Builder
+		if padding > 0 {
+			helpBoxContent.WriteString(strings.Repeat(" ", padding))
+		}
+		helpBoxContent.WriteString(helpContent)
+		// Fill remaining space
+		remaining := layout.InnerWidth - padding - textWidth
+		if remaining > 0 {
+			helpBoxContent.WriteString(strings.Repeat(" ", remaining))
+		}
+
+		// Apply white border to help content (1 row high) - same as menu screen
+		helpBordered := NewBorderStyleWithColor(colorWhite).
+			Width(layout.InnerWidth).
+			Height(1).
+			Render(helpBoxContent.String())
+
+		result.WriteString(helpBordered)
 	}
 
 	return result.String()

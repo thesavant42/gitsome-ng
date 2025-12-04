@@ -9,9 +9,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-//go:embed ansiart.txt
-var ansiArtRaw string
-
 // SplashModel is the TUI model for the splash screen
 type SplashModel struct {
 	width  int
@@ -59,44 +56,44 @@ func (m SplashModel) View() string {
 	// Add padding at the top so the border is visible
 	b.WriteString("\n")
 
-	// ANSI art - center each line
-	artLines := strings.Split(ansiArtRaw, "\n")
+	// Create a red square the size of the viewport with black background
+	// This is a placeholder to be fixed later
+	squareWidth := layout.InnerWidth
+	squareHeight := layout.ViewportHeight - 4 // Account for padding
 
-	for _, line := range artLines {
-		// Strip ANSI codes to measure actual visible width
-		visibleLine := stripANSI(line)
-		lineLen := len(visibleLine)
+	// Calculate center position for text
+	text := "YOLOSINT! by savant42"
+	textWidth := len(text)
+	textLine := squareHeight / 2 // Center vertically
 
-		// Center the line
-		padding := (layout.InnerWidth - lineLen) / 2
-		if padding > 0 {
-			b.WriteString(strings.Repeat(" ", padding))
+	// Create a black square with centered text
+	for i := 0; i < squareHeight; i++ {
+		if i == textLine {
+			// Center the text horizontally
+			padding := (squareWidth - textWidth) / 2
+			if padding > 0 {
+				b.WriteString(strings.Repeat(" ", padding))
+			}
+			b.WriteString(text)
+			// Fill remaining space
+			remaining := squareWidth - padding - textWidth
+			if remaining > 0 {
+				b.WriteString(strings.Repeat(" ", remaining))
+			}
+		} else {
+			// Create a row of black space
+			b.WriteString(strings.Repeat(" ", squareWidth))
 		}
-		b.WriteString(line)
 		b.WriteString("\n")
 	}
 
-	b.WriteString("\n")
-
-	// Banner text - plain white, no styling needed
-	banner := "yolosint! by thesavant42"
-
-	// Center the banner
-	bannerLen := len(banner)
-	padding := (layout.InnerWidth - bannerLen) / 2
-	if padding > 0 {
-		b.WriteString(strings.Repeat(" ", padding))
-	}
-	b.WriteString(banner)
-	b.WriteString("\n")
-
-	// Calculate available height for splash content
+	// Calculate available height for the red frame
 	availableHeight := layout.ViewportHeight - 4
 	if availableHeight < 10 {
 		availableHeight = 10
 	}
 
-	// Wrap in red bordered box with proper height
+	// Wrap the black square in a red bordered box
 	borderedContent := BorderStyle.
 		Width(layout.InnerWidth).
 		Height(availableHeight).

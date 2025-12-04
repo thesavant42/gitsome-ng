@@ -3463,39 +3463,67 @@ func (m TUIModel) renderFetchProgress() string {
 
 // renderMenu renders the menu overlay
 func (m TUIModel) renderMenu() string {
-	var b strings.Builder
-
+	// Build menu content (title, divider, options)
+	var menuContent strings.Builder
 	menuSelectedStyle := SelectedStyle.Width(m.layout.InnerWidth)
 	menuNormalStyle := NormalStyle.Width(m.layout.InnerWidth)
 
-	b.WriteString(TitleStyle.Render("Menu"))
-	b.WriteString("\n")
+	menuContent.WriteString(TitleStyle.Render("Menu"))
+	menuContent.WriteString("\n")
 	// White divider after title
-	b.WriteString(strings.Repeat("─", m.layout.InnerWidth))
-	b.WriteString("\n\n")
+	menuContent.WriteString(strings.Repeat("─", m.layout.InnerWidth))
+	menuContent.WriteString("\n\n")
 
 	for i, option := range menuOptions {
 		if i == m.menuCursor {
-			b.WriteString(menuSelectedStyle.Render("> " + option))
+			menuContent.WriteString(menuSelectedStyle.Render("> " + option))
 		} else {
-			b.WriteString(menuNormalStyle.Render("  " + option))
+			menuContent.WriteString(menuNormalStyle.Render("  " + option))
 		}
-		b.WriteString("\n")
+		menuContent.WriteString("\n")
 	}
 
-	// Calculate available height for border (viewport - top margin - footer - border overhead)
-	availableHeight := m.layout.ViewportHeight - 4
-	if availableHeight < 10 {
-		availableHeight = 10
+	// Build footer content (centered help text) - ensure it fills the full width
+	var footerContent strings.Builder
+	// Add help text row (yellow text, centered) - pad to full width
+	helpText := "Enter: select | Esc: exit"
+	// Calculate padding for center alignment
+	textWidth := len(helpText)
+	padding := (m.layout.InnerWidth - textWidth) / 2
+	if padding > 0 {
+		footerContent.WriteString(strings.Repeat(" ", padding))
+	}
+	footerContent.WriteString(HintStyle.Render(helpText))
+	// Fill remaining space to ensure full width
+	remaining := m.layout.InnerWidth - padding - textWidth
+	if remaining > 0 {
+		footerContent.WriteString(strings.Repeat(" ", remaining))
 	}
 
-	// Add border around menu with width from layout (InnerWidth so total = ViewportWidth) and dynamic height
-	borderStyle := BorderStyle.Width(m.layout.InnerWidth).Height(availableHeight).MarginTop(1)
+	// Calculate height for menu box - just enough to fit the menu content
+	// Menu content height: title (1) + divider (1) + menu options (13) = 15 rows
+	menuHeight := 15
 
+	// Calculate available space for proper layout
+	// We need to position the footer at the bottom of the viewport
+	// Calculate the vertical space between menu box and footer box
+	verticalSpace := m.layout.ViewportHeight - menuHeight - 3 // 3 = 1 for menu margin + 1 for footer margin + 1 for footer height
+
+	// Create two separate bordered sections
 	var result strings.Builder
-	result.WriteString(borderStyle.Render(b.String()))
-	result.WriteString("\n")
-	result.WriteString(" " + HintStyle.Render("Enter: select | Esc: exit"))
+
+	// First red box: Menu content with exact height
+	menuBorderStyle := BorderStyle.Width(m.layout.InnerWidth).Height(menuHeight).MarginTop(1)
+	result.WriteString(menuBorderStyle.Render(menuContent.String()))
+
+	// Add vertical space to push footer to bottom
+	if verticalSpace > 0 {
+		result.WriteString(strings.Repeat("\n", verticalSpace))
+	}
+
+	// Second white box: Footer content (single row height)
+	footerBorderStyle := NewBorderStyleWithColor(colorWhite).Width(m.layout.InnerWidth).Height(1).MarginTop(1)
+	result.WriteString(footerBorderStyle.Render(footerContent.String()))
 
 	return result.String()
 }
