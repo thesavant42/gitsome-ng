@@ -3327,46 +3327,47 @@ func (m TUIModel) renderQueryProgress() string {
 // This is needed because Bubbles table header border only spans column widths, not full width
 // Selection styling is applied manually to ensure full-width selector bar
 func (m TUIModel) renderBubblesTableWithFullWidth(t table.Model) string {
-	baseView := t.View()
-	lines := strings.Split(baseView, "\n")
+	tableOutput := t.View()
+	lines := strings.Split(tableOutput, "\n")
 	var result []string
 
 	cursor := t.Cursor()
-	height := t.Height()
 
-	// Table renders rows from start to end where start = max(cursor-height, 0)
-	// The cursor position in visible output = cursor - start = min(cursor, height)
-	visibleCursor := cursor
-	if cursor > height {
-		visibleCursor = height
+	// Calculate visible cursor index based on table scrolling
+	// Table configured height includes header, so data rows = height - 1
+	height := t.Height() - 1 // number of visible data rows
+	totalRows := len(t.Rows())
+	start := 0
+	if cursor >= height {
+		start = cursor - height + 1
 	}
+	if start > totalRows-height {
+		start = totalRows - height
+	}
+	if start < 0 {
+		start = 0
+	}
+	visibleCursorIndex := cursor - start
 
-	for i, line := range lines {
-		// Header row - apply full width for consistent rendering
-		if i == 0 {
-			result = append(result, NormalStyle.Width(m.layout.InnerWidth).Render(line))
-			continue
-		}
+	// Header row
+	result = append(result, NormalStyle.Width(m.layout.InnerWidth).Render(lines[0]))
 
-		// Divider line (line 1) - use InnerWidth for full width
-		if i == 1 {
-			result = append(result, strings.Repeat("─", m.layout.InnerWidth))
-			continue
-		}
+	// Divider line
+	result = append(result, strings.Repeat("─", m.layout.InnerWidth))
 
-		// Data rows start at line 2, so dataRowIndex = i - 2
-		dataRowIndex := i - 2
+	// Data rows - lines[1] onwards (skipping the built-in divider at lines[1])
+	for i := 1; i < len(lines); i++ {
+		dataRowIndex := i - 1
 
-		// Apply full-width selection styling to the selected row
-		// Strip ANSI codes first to prevent embedded reset codes from killing the background
-		if dataRowIndex == visibleCursor {
-			cleanLine := stripANSI(line)
+		// Apply selection styling to cursor row
+		if dataRowIndex == visibleCursorIndex {
+			cleanLine := stripANSI(lines[i])
 			result = append(result, SelectedStyle.Width(m.layout.InnerWidth).Render(cleanLine))
 			continue
 		}
 
-		// Non-selected data rows - apply normal text color with full width
-		result = append(result, NormalStyle.Width(m.layout.InnerWidth).Render(line))
+		// Non-selected rows - apply normal text color with full width
+		result = append(result, NormalStyle.Width(m.layout.InnerWidth).Render(lines[i]))
 	}
 
 	return strings.Join(result, "\n")
@@ -3831,20 +3832,16 @@ func (m TUIModel) renderTableWithLinks() string {
 	dataRowIndex := 0
 
 	for i, line := range lines {
-		// Keep header row (line 0) as-is
+		// Keep header row (line 0) as-is, but add our divider after it
 		if i == 0 {
 			result = append(result, line)
-			continue
-		}
-
-		// Divider line - use InnerWidth for full width
-		if i == 1 {
+			// Add divider after header - use InnerWidth for full width
 			result = append(result, strings.Repeat("─", m.layout.InnerWidth))
 			continue
 		}
 
-		// For data rows (i >= 2), calculate the actual data index
-		dataRowIndex = i - 2
+		// For data rows (i >= 1), calculate the actual data index
+		dataRowIndex = i - 1
 
 		// Selector bar - use InnerWidth for full width
 		if dataRowIndex == visibleCursorIndex {
