@@ -12,7 +12,6 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/huh"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -381,21 +380,44 @@ type Layout struct {
 }
 
 func NewLayout(terminalWidth, terminalHeight int) Layout {
+	const (
+		// Content inside main box (before table)
+		titleLine          = 1
+		newlineAfterTitle  = 1
+		separatorLine      = 1
+		blankLinesAfterSep = 2
+		queryInfoLine      = 1
+		blankLineAfterInfo = 1
+		contentBeforeTable = titleLine + newlineAfterTitle + separatorLine + blankLinesAfterSep + queryInfoLine + blankLineAfterInfo // = 6
+
+		// Box structure outside main content
+		mainBoxBorders  = 2 // top + bottom border
+		footerBoxHeight = 3 // 1 content + 2 borders
+		boxSpacing      = 1 // newline between main and footer
+
+		minTableHeight = 5 // minimum table height
+		borderWidth    = 2 // left + right border
+	)
+
 	width := terminalWidth
 	if width < MinViewportWidth {
 		width = MinViewportWidth
 	}
-	tableHeight := terminalHeight - 3 - 3 - 2 - 3
-	if tableHeight < 5 {
-		tableHeight = 5
+
+	// TableHeight = terminal - main borders - content before table - spacing - footer box
+	// Add 3 additional lines to fill the gap
+	tableHeight := terminalHeight - mainBoxBorders - contentBeforeTable - boxSpacing - footerBoxHeight + 3
+	if tableHeight < minTableHeight {
+		tableHeight = minTableHeight
 	}
+
 	return Layout{
 		ViewportWidth:  width,
 		ViewportHeight: terminalHeight,
-		ContentWidth:   width - 2,
-		TableWidth:     width - 2,
+		ContentWidth:   width - borderWidth,
+		TableWidth:     width - borderWidth,
 		TableHeight:    tableHeight,
-		InnerWidth:     width - 2,
+		InnerWidth:     width - borderWidth,
 	}
 }
 
@@ -464,16 +486,17 @@ func BuildTableColumns(widths ColumnWidths) []table.Column {
 // Note: bubbles/table still uses its own internal styling, we just configure it
 func ApplyTableStyles(t *table.Model) {
 	s := table.DefaultStyles()
-	// Header: bold white with bottom border
+	// Header: bold white with bottom border, NO padding
 	s.Header = s.Header.
 		BorderBottom(true).
-		Bold(true)
+		Bold(true).
+		Padding(0)
 	// Selected: CRITICAL - must have NO background or it interferes with manual selection
 	// Bubbles table has pink default - we MUST unset it completely
 	s.Selected = s.Selected.
 		Bold(false).
-		Background(lipgloss.NoColor{}).
-		Foreground(lipgloss.NoColor{})
+		UnsetBackground().
+		UnsetForeground()
 	// Cell: no extra padding, clear cell foreground
 	s.Cell = s.Cell.UnsetForeground().Padding(0)
 	t.SetStyles(s)

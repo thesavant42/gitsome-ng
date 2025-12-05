@@ -87,6 +87,12 @@ const (
 	maxDelay     = 2000 // 2 second delay (slowest, most respectful)
 )
 
+// Wayback table view layout constants
+const (
+	waybackContentBeforeTable = 6 // Lines before table: title(1) + \n(1) + sep(1) + \n\n(2) + queryInfo(1) + \n(1) = 6, minus table header/divider(2) = net 4
+	waybackTableHeaderLines   = 2 // Header row + divider = 2
+)
+
 // getRequestDelay returns the delay as a time.Duration
 func getRequestDelay(delayMs int) time.Duration {
 	if delayMs < 0 {
@@ -166,7 +172,7 @@ type waybackDomainsLoadedMsg struct {
 // NewWaybackModel creates a new Wayback Machine TUI
 func NewWaybackModel(logger *log.Logger, database *db.DB) WaybackModel {
 	ti := textinput.New()
-	ti.Placeholder = "Enter domain (e.g., playground.bfl.ai)"
+	ti.Placeholder = "Enter domain (e.g., test.acme.ai)"
 	ti.Focus()
 	ti.CharLimit = 200
 	// Use default textinput styles - Charm component requires lipgloss.Style
@@ -216,8 +222,10 @@ func (m WaybackModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.layout = NewLayout(msg.Width, msg.Height)
+
 		m.table.SetHeight(m.layout.TableHeight)
-		m.textInput.Width = m.layout.InnerWidth - 10
+		const textInputPadding = 10
+		m.textInput.Width = m.layout.InnerWidth - textInputPadding
 
 		columns := calculateWaybackColumns(m.layout.TableWidth)
 		m.table.SetColumns(columns)
@@ -934,6 +942,15 @@ func (m WaybackModel) handleDomainsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // View implements tea.Model
 func (m WaybackModel) View() string {
+	// Layout constants
+	const (
+		footerBoxHeight       = 3  // 1 content line + 2 border lines
+		footerBoxContentLines = 1  // number of content lines in footer
+		boxSpacing            = 1  // spacing between main and footer boxes
+		mainBoxBorderOverhead = 2  // top and bottom border of main box
+		minMainBoxHeight      = 10 // minimum height for main content box
+	)
+
 	if m.quitting {
 		return ""
 	}
@@ -968,14 +985,12 @@ func (m WaybackModel) View() string {
 		contentBuilder.WriteString(m.renderSettingsView())
 	}
 
-	// Get the content string
 	content := contentBuilder.String()
 
 	// Calculate available height for main content box
-	// Subtract: footer box (3 lines: 1 content + 2 border) + spacing (1 line) + border overhead (2 lines)
-	mainAvailableHeight := m.layout.ViewportHeight - 6
-	if mainAvailableHeight < 10 {
-		mainAvailableHeight = 10
+	mainAvailableHeight := m.layout.ViewportHeight - footerBoxHeight - boxSpacing - mainBoxBorderOverhead
+	if mainAvailableHeight < minMainBoxHeight {
+		mainAvailableHeight = minMainBoxHeight
 	}
 
 	// Pad content to fill available height
@@ -987,41 +1002,40 @@ func (m WaybackModel) View() string {
 	// Build result with two-box layout
 	var result strings.Builder
 
-	// First box: Main content (red border)
+	// Main content box (red border)
 	mainBordered := BorderStyle.
 		Width(m.layout.InnerWidth).
 		Height(mainAvailableHeight).
 		Render(content)
 	result.WriteString(mainBordered)
-	result.WriteString("\n") // Spacing between boxes
+	result.WriteString("\n")
 
-	// Error message (if any) - shown above footer box (only for errors, not status)
+	// Error message (if any) - shown above footer box
 	if m.err != nil {
 		result.WriteString(fmt.Sprintf(" Error: %v\n", m.err))
 	}
 
-	// Second box: Help text (white border, 1 row high)
+	// Footer box: Help text (white border)
 	helpText := m.getHelpTextPlain()
 	textWidth := len(helpText)
 	padding := (m.layout.InnerWidth - textWidth) / 2
 	if padding < 0 {
 		padding = 0
 	}
+
 	var footerContent strings.Builder
 	if padding > 0 {
 		footerContent.WriteString(strings.Repeat(" ", padding))
 	}
 	footerContent.WriteString(HintStyle.Render(helpText))
-	// Fill remaining space
 	remaining := m.layout.InnerWidth - padding - textWidth
 	if remaining > 0 {
 		footerContent.WriteString(strings.Repeat(" ", remaining))
 	}
 
-	// Apply white border to footer
 	footerBordered := NewBorderStyleWithColor(colorWhite).
 		Width(m.layout.InnerWidth).
-		Height(1).
+		Height(footerBoxContentLines).
 		Render(footerContent.String())
 	result.WriteString(footerBordered)
 
@@ -1145,25 +1159,64 @@ func (m WaybackModel) renderTableView() string {
 	if maxPage < 1 {
 		maxPage = 1
 	}
-	queryInfo += fmt.Sprintf("  |  Page %d/%d  |  Total: %d", m.page, maxPage, m.totalRecords)
-	b.WriteString(AccentStyle.Render(queryInfo))
-	b.WriteString("\n\n")
-
-	// Info row 1: Position tracking
 	currentRow := m.table.Cursor() + 1
 	totalRows := len(m.filteredRecords)
-	b.WriteString(fmt.Sprintf(" Row %d/%d", currentRow, totalRows))
+	queryInfo += fmt.Sprintf("  |  Page %d/%d  |  Total: %d  |  Row %d/%d", m.page, maxPage, m.totalRecords, currentRow, totalRows)
+	b.WriteString(AccentStyle.Render(queryInfo))
 	b.WriteString("\n")
 
-	// Info row 2: Viewport information
-	pageOffset := (m.page - 1) * m.pageSize
-	b.WriteString(fmt.Sprintf(" Viewing records %d-%d of %d total", pageOffset+1, pageOffset+len(m.filteredRecords), m.totalRecords))
-	b.WriteString("\n\n")
-
 	// Table
-	b.WriteString(renderTableWithFullWidthSelection(m.table, m.layout))
+	b.WriteString(renderWaybackTable(m.table, m.layout))
 
 	return b.String()
+}
+
+// renderWaybackTable renders the wayback table with full-width selection highlight
+func renderWaybackTable(t table.Model, layout Layout) string {
+	tableOutput := t.View()
+	lines := strings.Split(tableOutput, "\n")
+	var result []string
+
+	cursor := t.Cursor()
+
+	// Calculate visible cursor index based on table scrolling
+	// Table configured height includes header, so data rows = height - 1
+	height := t.Height() - 1 // number of visible data rows
+	totalRows := len(t.Rows())
+	start := 0
+	if cursor >= height {
+		start = cursor - height + 1
+	}
+	if start > totalRows-height {
+		start = totalRows - height
+	}
+	if start < 0 {
+		start = 0
+	}
+	visibleCursorIndex := cursor - start
+
+	// Header row
+	result = append(result, NormalStyle.Width(layout.InnerWidth).Render(lines[0]))
+
+	// Divider line
+	result = append(result, strings.Repeat("─", layout.InnerWidth))
+
+	// Data rows
+	for i := 1; i < len(lines); i++ {
+		dataRowIndex := i - 1
+
+		// Apply selection styling to cursor row
+		if dataRowIndex == visibleCursorIndex {
+			cleanLine := stripANSI(lines[i])
+			result = append(result, SelectedStyle.Width(layout.InnerWidth).Render(cleanLine))
+			continue
+		}
+
+		// Non-selected rows - preserve column structure from bubbles table
+		result = append(result, NormalStyle.Width(layout.InnerWidth).Render(lines[i]))
+	}
+
+	return strings.Join(result, "\n")
 }
 
 func (m WaybackModel) renderFilterView() string {
@@ -1593,6 +1646,8 @@ func (m *WaybackModel) applyFilters() {
 }
 
 func (m *WaybackModel) updateTable() {
+	oldCursor := m.table.Cursor()
+
 	columns := calculateWaybackColumns(m.layout.TableWidth)
 
 	urlW := columns[0].Width
@@ -1638,38 +1693,41 @@ func (m *WaybackModel) updateTable() {
 
 	m.table.SetColumns(columns)
 	m.table.SetRows(rows)
-	m.table.SetCursor(0) // Start at first visible row
+	m.table.SetCursor(oldCursor)
 }
 
+const (
+	waybackTimestampWidth = 20 // YYYY-MM-DD HH:MM:SS + spacing
+	waybackStatusWidth    = 10 // "Status" header + spacing
+	waybackMimeWidth      = 30 // "application/octet-stream" + spacing
+	waybackMinURLWidth    = 30
+	waybackMinTotalWidth  = 80
+)
+
 func calculateWaybackColumns(totalW int) []table.Column {
-	if totalW < 80 {
-		totalW = 80
+	if totalW < waybackMinTotalWidth {
+		totalW = waybackMinTotalWidth
 	}
 
-	// Fixed widths for smaller columns - give them breathing room
-	tsW := 18    // YYYY-MM-DD HH:MM:SS with padding
-	statusW := 8 // Status code with padding
-	mimeW := 22  // MIME type with padding
+	fixedTotal := waybackTimestampWidth + waybackStatusWidth + waybackMimeWidth
 
-	fixedTotal := tsW + statusW + mimeW
-
-	// URL gets remaining space (truncation is OK since we have detail view)
+	// URL gets remaining space
 	urlW := totalW - fixedTotal
-	if urlW < 30 {
-		urlW = 30
+	if urlW < waybackMinURLWidth {
+		urlW = waybackMinURLWidth
 	}
 
 	// Verify exact match
-	actualTotal := urlW + tsW + statusW + mimeW
+	actualTotal := urlW + waybackTimestampWidth + waybackStatusWidth + waybackMimeWidth
 	if actualTotal != totalW {
 		urlW += (totalW - actualTotal)
 	}
 
 	return []table.Column{
 		{Title: "URL", Width: urlW},
-		{Title: "Timestamp", Width: tsW},
-		{Title: "Status", Width: statusW},
-		{Title: "MIME Type", Width: mimeW},
+		{Title: "Timestamp", Width: waybackTimestampWidth},
+		{Title: "Status", Width: waybackStatusWidth},
+		{Title: "MIME Type", Width: waybackMimeWidth},
 	}
 }
 

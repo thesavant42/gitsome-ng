@@ -3331,8 +3331,15 @@ func (m TUIModel) renderBubblesTableWithFullWidth(t table.Model) string {
 	lines := strings.Split(baseView, "\n")
 	var result []string
 
-	// Get current cursor position for full-width selection
 	cursor := t.Cursor()
+	height := t.Height()
+
+	// Table renders rows from start to end where start = max(cursor-height, 0)
+	// The cursor position in visible output = cursor - start = min(cursor, height)
+	visibleCursor := cursor
+	if cursor > height {
+		visibleCursor = height
+	}
 
 	for i, line := range lines {
 		// Header row - apply full width for consistent rendering
@@ -3352,7 +3359,7 @@ func (m TUIModel) renderBubblesTableWithFullWidth(t table.Model) string {
 
 		// Apply full-width selection styling to the selected row
 		// Strip ANSI codes first to prevent embedded reset codes from killing the background
-		if dataRowIndex == cursor {
+		if dataRowIndex == visibleCursor {
 			cleanLine := stripANSI(line)
 			result = append(result, SelectedStyle.Width(m.layout.InnerWidth).Render(cleanLine))
 			continue
@@ -3805,6 +3812,21 @@ func (m TUIModel) renderTableWithLinks() string {
 	// Get current cursor position for full-width selection
 	cursor := m.table.Cursor()
 
+	// Calculate visible cursor index based on table scrolling
+	height := m.layout.TableHeight
+	totalRows := len(m.stats)
+	start := 0
+	if cursor >= height {
+		start = cursor - height + 1
+	}
+	if start > totalRows-height {
+		start = totalRows - height
+	}
+	if start < 0 {
+		start = 0
+	}
+	visibleCursorIndex := cursor - start
+
 	// Track data row index (rows after header)
 	dataRowIndex := 0
 
@@ -3825,8 +3847,7 @@ func (m TUIModel) renderTableWithLinks() string {
 		dataRowIndex = i - 2
 
 		// Selector bar - use InnerWidth for full width
-		// Fix: offset by -1 to match cursor position
-		if dataRowIndex == cursor-1 {
+		if dataRowIndex == visibleCursorIndex {
 			// Strip ANSI codes first to prevent embedded reset codes from killing the background
 			cleanLine := stripANSI(line)
 			// Apply style directly with correct width (like menu does)

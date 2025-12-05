@@ -122,11 +122,12 @@ func renderTableWithFullWidthSelection(t table.Model, layout Layout) string {
 		}
 
 		// Data rows start at line 2, so dataRowIndex = i - 2
-		dataRowIndex := i - 2
+		dataRowIndex := i - 3
 
 		// Apply full-width selection styling to the selected row
-		// Strip ANSI codes first to prevent embedded reset codes from killing the background
-		if dataRowIndex == cursor {
+		// The table component handles scrolling internally, so we just need to match
+		// the cursor position with the corresponding visible line
+		if dataRowIndex >= 0 && dataRowIndex == cursor {
 			cleanLine := stripANSI(line)
 			result = append(result, SelectedStyle.Width(layout.InnerWidth).Render(cleanLine))
 			continue
