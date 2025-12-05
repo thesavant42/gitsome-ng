@@ -1861,23 +1861,54 @@ func (m cachedImageTableModel) View() string {
 	// Table with full-width selection
 	contentBuilder.WriteString(renderTableWithFullWidthSelection(m.table, m.layout))
 
-	// Calculate available height for border
-	availableHeight := m.layout.ViewportHeight - 4
-	if availableHeight < 10 {
-		availableHeight = 10
+	// Get the content string
+	content := contentBuilder.String()
+
+	// Calculate available height for main content box
+	// Subtract: footer box (3 lines: 1 content + 2 border) + spacing (1 line) + border overhead (2 lines)
+	mainAvailableHeight := m.layout.ViewportHeight - 6
+	if mainAvailableHeight < 10 {
+		mainAvailableHeight = 10
 	}
 
-	// Border around content using InnerWidth with proper height
-	borderedContent := BorderStyle.
-		Width(m.layout.InnerWidth).
-		Height(availableHeight).
-		Render(contentBuilder.String())
+	// Pad content to fill available height
+	contentLines := strings.Count(content, "\n")
+	if contentLines < mainAvailableHeight {
+		content += strings.Repeat("\n", mainAvailableHeight-contentLines)
+	}
 
+	// Build result with two-box layout
 	var result strings.Builder
-	result.WriteString("\n") // Top margin to avoid terminal edge
-	result.WriteString(borderedContent)
-	result.WriteString("\n")
-	result.WriteString(" " + HintStyle.Render("enter: select | q/esc: back"))
+
+	// First box: Main content (red border)
+	mainBordered := BorderStyle.
+		Width(m.layout.InnerWidth).
+		Height(mainAvailableHeight).
+		Render(content)
+	result.WriteString(mainBordered)
+	result.WriteString("\n") // Spacing between boxes
+
+	// Second box: Help text (white border, 1 row high)
+	helpText := "enter: select | q/esc: back"
+	textWidth := len(helpText)
+	padding := (m.layout.InnerWidth - textWidth) / 2
+	var footerContent strings.Builder
+	if padding > 0 {
+		footerContent.WriteString(strings.Repeat(" ", padding))
+	}
+	footerContent.WriteString(HintStyle.Render(helpText))
+	// Fill remaining space
+	remaining := m.layout.InnerWidth - padding - textWidth
+	if remaining > 0 {
+		footerContent.WriteString(strings.Repeat(" ", remaining))
+	}
+
+	// Apply white border to footer
+	footerBordered := NewBorderStyleWithColor(colorWhite).
+		Width(m.layout.InnerWidth).
+		Height(1).
+		Render(footerContent.String())
+	result.WriteString(footerBordered)
 
 	return result.String()
 }
@@ -2277,6 +2308,9 @@ func (m searchModel) View() string {
 
 	// Title
 	contentBuilder.WriteString(TitleStyle.Render("Search Cached Layers"))
+	contentBuilder.WriteString("\n")
+	// White divider after title
+	contentBuilder.WriteString(strings.Repeat("─", m.layout.InnerWidth))
 	contentBuilder.WriteString("\n\n")
 
 	// Search input
@@ -2300,27 +2334,59 @@ func (m searchModel) View() string {
 		}
 	}
 
-	// Calculate available height for border
-	availableHeight := m.layout.ViewportHeight - 4
-	if availableHeight < 10 {
-		availableHeight = 10
+	// Get the content string
+	content := contentBuilder.String()
+
+	// Calculate available height for main content box
+	// Subtract: footer box (3 lines: 1 content + 2 border) + spacing (1 line) + border overhead (2 lines)
+	mainAvailableHeight := m.layout.ViewportHeight - 6
+	if mainAvailableHeight < 10 {
+		mainAvailableHeight = 10
 	}
 
-	// Border around content using InnerWidth with proper height
-	borderedContent := BorderStyle.
-		Width(m.layout.InnerWidth).
-		Height(availableHeight).
-		Render(contentBuilder.String())
+	// Pad content to fill available height
+	contentLines := strings.Count(content, "\n")
+	if contentLines < mainAvailableHeight {
+		content += strings.Repeat("\n", mainAvailableHeight-contentLines)
+	}
 
+	// Build result with two-box layout
 	var result strings.Builder
-	result.WriteString("\n") // Top margin
-	result.WriteString(borderedContent)
-	result.WriteString("\n")
+
+	// First box: Main content (red border)
+	mainBordered := BorderStyle.
+		Width(m.layout.InnerWidth).
+		Height(mainAvailableHeight).
+		Render(content)
+	result.WriteString(mainBordered)
+	result.WriteString("\n") // Spacing between boxes
+
+	// Second box: Help text (white border, 1 row high)
+	var helpText string
 	if m.inputMode {
-		result.WriteString(" " + HintStyle.Render("Enter: search | Esc: back"))
+		helpText = "Enter: search | Esc: back"
 	} else {
-		result.WriteString(" " + HintStyle.Render("/ : new search | q/Esc: back"))
+		helpText = "/: new search | q/Esc: back"
 	}
+	textWidth := len(helpText)
+	padding := (m.layout.InnerWidth - textWidth) / 2
+	var footerContent strings.Builder
+	if padding > 0 {
+		footerContent.WriteString(strings.Repeat(" ", padding))
+	}
+	footerContent.WriteString(HintStyle.Render(helpText))
+	// Fill remaining space
+	remaining := m.layout.InnerWidth - padding - textWidth
+	if remaining > 0 {
+		footerContent.WriteString(strings.Repeat(" ", remaining))
+	}
+
+	// Apply white border to footer
+	footerBordered := NewBorderStyleWithColor(colorWhite).
+		Width(m.layout.InnerWidth).
+		Height(1).
+		Render(footerContent.String())
+	result.WriteString(footerBordered)
 
 	return result.String()
 }

@@ -178,6 +178,14 @@ func main() {
 					continue // Return to main TUI after browsing
 				}
 
+				// If user wants to browse cached Wayback CDX records
+				if result.LaunchWaybackCache {
+					if err := ui.RunWaybackCacheBrowser(log.Default(), database); err != nil {
+						ui.PrintError(fmt.Sprintf("Wayback cache browser failed: %v", err))
+					}
+					continue // Return to main TUI after browsing
+				}
+
 				// If user wants to switch projects, close current db and show selector
 				if result.SwitchProject {
 					database.Close()

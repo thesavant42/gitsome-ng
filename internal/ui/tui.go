@@ -62,6 +62,7 @@ var menuOptions = []string{
 	"Browse Cached Layers",
 	"Search Cached Layers",
 	"Wayback Machine",
+	"Browse Wayback Cache",
 	"Switch Project",
 	"Export Tab to Markdown",
 	"Export Database Backup",
@@ -160,6 +161,7 @@ type TUIModel struct {
 	launchCachedLayers       bool   // true when user wants to browse cached layers
 	launchSearchCachedLayers bool   // true when user wants to search cached layers
 	launchWayback            bool   // true when user wants to launch Wayback Machine browser
+	launchWaybackCache       bool   // true when user wants to browse Wayback cache
 
 	// Export state
 	dbPath        string // path to current database for backup export
@@ -1452,11 +1454,15 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			m.launchWayback = true
 			return m, tea.Quit
-		case 9: // Switch Project
+		case 9: // Browse Wayback Cache
+			m.quitting = true
+			m.launchWaybackCache = true
+			return m, tea.Quit
+		case 10: // Switch Project
 			m.quitting = true
 			m.switchProject = true
 			return m, tea.Quit
-		case 10: // Export Tab to Markdown
+		case 11: // Export Tab to Markdown
 			m.menuVisible = false
 			filename, err := ExportTabToMarkdown(m.stats, m.repoOwner, m.repoName, m.totalCommits, m.showCombined)
 			if err != nil {
@@ -1464,7 +1470,7 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.exportMessage = fmt.Sprintf("Exported to %s", filename)
 			}
-		case 11: // Export Database Backup
+		case 12: // Export Database Backup
 			m.menuVisible = false
 			if m.dbPath != "" {
 				filename, err := ExportDatabaseBackup(m.dbPath)
@@ -1476,7 +1482,7 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.exportMessage = "Database path not available"
 			}
-		case 12: // Export Project Report
+		case 13: // Export Project Report
 			m.menuVisible = false
 			if m.database != nil {
 				filename, err := ExportProjectReport(m.database, m.dbPath)
@@ -2911,8 +2917,9 @@ func (m TUIModel) renderRepoView() string {
 	row2Styled := HintStyle.Render(row2Text)
 	contentBuilder.WriteString(row2Styled)
 
-	// Calculate available height for border (same pattern as other screens)
-	availableHeight := m.layout.ViewportHeight - 2
+	// Calculate available height for border
+	// Subtract: top margin (1 line) + border overhead (2 lines) + 1 for safety
+	availableHeight := m.layout.ViewportHeight - 4
 	if availableHeight < 15 {
 		availableHeight = 15
 	}
@@ -3151,31 +3158,70 @@ func (m TUIModel) renderPageIndicator() string {
 
 // renderAddRepo renders the add repository input screen
 func (m TUIModel) renderAddRepo() string {
-	var b strings.Builder
+	// Build main content
+	var mainContent strings.Builder
 
-	b.WriteString(TitleStyle.Render("Add Repository"))
-	b.WriteString("\n\n")
+	mainContent.WriteString(TitleStyle.Render("Add Repository"))
+	mainContent.WriteString("\n")
+	// White divider after title
+	mainContent.WriteString(strings.Repeat("─", m.layout.InnerWidth))
+	mainContent.WriteString("\n\n")
 
-	b.WriteString(NormalStyle.Render("Enter repository in owner/repo format:"))
-	b.WriteString("\n\n")
+	mainContent.WriteString(NormalStyle.Render("Enter repository in owner/repo format:"))
+	mainContent.WriteString("\n\n")
 
-	b.WriteString(AccentStyle.Render("> "))
-	b.WriteString(m.addRepoInput)
-	b.WriteString("_")
+	mainContent.WriteString(AccentStyle.Render("> "))
+	mainContent.WriteString(m.addRepoInput)
+	mainContent.WriteString("_")
 
-	// Calculate available height for border (viewport - top margin - footer - border overhead)
-	availableHeight := m.layout.ViewportHeight - 4
-	if availableHeight < 10 {
-		availableHeight = 10
+	// Get the content string
+	content := mainContent.String()
+
+	// Calculate available height for main content box
+	// Subtract: footer box (3 lines: 1 content + 2 border) + spacing (1 line) + border overhead (2 lines)
+	mainAvailableHeight := m.layout.ViewportHeight - 6
+	if mainAvailableHeight < 10 {
+		mainAvailableHeight = 10
 	}
 
-	// Add border with width from layout (InnerWidth so total = ViewportWidth) and dynamic height
-	borderStyle := BorderStyle.Width(m.layout.InnerWidth).Height(availableHeight).MarginTop(1)
+	// Pad content to fill available height
+	contentLines := strings.Count(content, "\n")
+	if contentLines < mainAvailableHeight {
+		content += strings.Repeat("\n", mainAvailableHeight-contentLines)
+	}
 
+	// Build result with two-box layout
 	var result strings.Builder
-	result.WriteString(borderStyle.Render(b.String()))
-	result.WriteString("\n")
-	result.WriteString(" " + HintStyle.Render("Enter: add repository | Esc: cancel"))
+
+	// First box: Main content (red border)
+	mainBordered := BorderStyle.
+		Width(m.layout.InnerWidth).
+		Height(mainAvailableHeight).
+		Render(content)
+	result.WriteString(mainBordered)
+	result.WriteString("\n") // Spacing between boxes
+
+	// Second box: Help text (white border, 1 row high)
+	helpText := "Enter: add repository | Esc: cancel"
+	textWidth := len(helpText)
+	padding := (m.layout.InnerWidth - textWidth) / 2
+	var footerContent strings.Builder
+	if padding > 0 {
+		footerContent.WriteString(strings.Repeat(" ", padding))
+	}
+	footerContent.WriteString(HintStyle.Render(helpText))
+	// Fill remaining space
+	remaining := m.layout.InnerWidth - padding - textWidth
+	if remaining > 0 {
+		footerContent.WriteString(strings.Repeat(" ", remaining))
+	}
+
+	// Apply white border to footer
+	footerBordered := NewBorderStyleWithColor(colorWhite).
+		Width(m.layout.InnerWidth).
+		Height(1).
+		Render(footerContent.String())
+	result.WriteString(footerBordered)
 
 	return result.String()
 }
@@ -3483,13 +3529,38 @@ func (m TUIModel) renderMenu() string {
 		menuContent.WriteString("\n")
 	}
 
-	// Build footer content (centered help text) - ensure it fills the full width
-	var footerContent strings.Builder
-	// Add help text row (yellow text, centered) - pad to full width
+	// Get the menu content string
+	mainContent := menuContent.String()
+
+	// Calculate available height for main content box
+	// We need to subtract: footer box height (1 content + 2 border = 3 lines), spacing (1 line), and border overhead (2 lines)
+	mainAvailableHeight := m.layout.ViewportHeight - 6 // -3 footer box, -1 spacing, -2 border overhead
+	if mainAvailableHeight < 15 {
+		mainAvailableHeight = 15
+	}
+
+	// Pad the content with newlines to fill the available height (anchors footer at bottom)
+	mainContentLines := strings.Count(mainContent, "\n")
+	if mainContentLines < mainAvailableHeight {
+		mainContent += strings.Repeat("\n", mainAvailableHeight-mainContentLines)
+	}
+
+	// Build result with two-box layout
+	var result strings.Builder
+
+	// First box: Main content (menu items) - fills available space
+	mainBordered := BorderStyle.
+		Width(m.layout.InnerWidth).
+		Height(mainAvailableHeight).
+		Render(mainContent)
+	result.WriteString(mainBordered)
+	result.WriteString("\n") // Spacing between boxes
+
+	// Second box: Help text (1 row high) - anchored at bottom
 	helpText := "Enter: select | Esc: exit"
-	// Calculate padding for center alignment
 	textWidth := len(helpText)
 	padding := (m.layout.InnerWidth - textWidth) / 2
+	var footerContent strings.Builder
 	if padding > 0 {
 		footerContent.WriteString(strings.Repeat(" ", padding))
 	}
@@ -3500,84 +3571,106 @@ func (m TUIModel) renderMenu() string {
 		footerContent.WriteString(strings.Repeat(" ", remaining))
 	}
 
-	// Calculate height for menu box - just enough to fit the menu content
-	// Menu content height: title (1) + divider (1) + menu options (13) = 15 rows
-	menuHeight := 15
-
-	// Calculate available space for proper layout
-	// We need to position the footer at the bottom of the viewport
-	// Calculate the vertical space between menu box and footer box
-	verticalSpace := m.layout.ViewportHeight - menuHeight - 3 // 3 = 1 for menu margin + 1 for footer margin + 1 for footer height
-
-	// Create two separate bordered sections
-	var result strings.Builder
-
-	// First red box: Menu content with exact height
-	menuBorderStyle := BorderStyle.Width(m.layout.InnerWidth).Height(menuHeight).MarginTop(1)
-	result.WriteString(menuBorderStyle.Render(menuContent.String()))
-
-	// Add vertical space to push footer to bottom
-	if verticalSpace > 0 {
-		result.WriteString(strings.Repeat("\n", verticalSpace))
-	}
-
-	// Second white box: Footer content (single row height)
-	footerBorderStyle := NewBorderStyleWithColor(colorWhite).Width(m.layout.InnerWidth).Height(1).MarginTop(1)
-	result.WriteString(footerBorderStyle.Render(footerContent.String()))
+	// Apply white border to footer content (1 row high)
+	footerBordered := NewBorderStyleWithColor(colorWhite).
+		Width(m.layout.InnerWidth).
+		Height(1).
+		Render(footerContent.String())
+	result.WriteString(footerBordered)
 
 	return result.String()
 }
 
 // renderDomainConfig renders the domain configuration screen
 func (m TUIModel) renderDomainConfig() string {
-	var b strings.Builder
+	// Build main content
+	var mainContent strings.Builder
 
-	b.WriteString(TitleStyle.Render("Configure Highlight Domains"))
-	b.WriteString("\n\n")
+	mainContent.WriteString(TitleStyle.Render("Configure Highlight Domains"))
+	mainContent.WriteString("\n")
+	// White divider after title
+	mainContent.WriteString(strings.Repeat("─", m.layout.InnerWidth))
+	mainContent.WriteString("\n\n")
 
 	if len(m.domainList) == 0 {
-		b.WriteString(NormalStyle.Render("No domains configured. Press A to add one."))
-		b.WriteString("\n")
+		mainContent.WriteString(NormalStyle.Render("No domains configured. Press A to add one."))
+		mainContent.WriteString("\n")
 	} else {
 		for i, domain := range m.domainList {
 			if i == m.domainCursor {
 				// Selected row - use full-width selector style
-				b.WriteString(SelectedStyle.Width(m.layout.InnerWidth).Render("> " + domain))
+				mainContent.WriteString(SelectedStyle.Width(m.layout.InnerWidth).Render("> " + domain))
 			} else {
 				// Normal row - use accent style
-				b.WriteString("  ")
-				b.WriteString(AccentStyle.Render(domain))
+				mainContent.WriteString("  ")
+				mainContent.WriteString(AccentStyle.Render(domain))
 			}
-			b.WriteString("\n")
+			mainContent.WriteString("\n")
 		}
 	}
 
-	b.WriteString("\n")
+	mainContent.WriteString("\n")
 
 	// Show input field if active
 	if m.domainInputActive {
-		b.WriteString(AccentStyle.Render("Add domain: "))
-		b.WriteString(m.domainInput)
-		b.WriteString("_")
+		mainContent.WriteString(AccentStyle.Render("Add domain: "))
+		mainContent.WriteString(m.domainInput)
+		mainContent.WriteString("_")
 	}
 
-	// Calculate available height for border (viewport - top margin - footer - border overhead)
-	availableHeight := m.layout.ViewportHeight - 4
-	if availableHeight < 10 {
-		availableHeight = 10
+	// Get the content string
+	content := mainContent.String()
+
+	// Calculate available height for main content box
+	// Subtract: footer box (3 lines: 1 content + 2 border) + spacing (1 line) + border overhead (2 lines)
+	mainAvailableHeight := m.layout.ViewportHeight - 6
+	if mainAvailableHeight < 10 {
+		mainAvailableHeight = 10
 	}
 
-	// Add border around config screen with width from layout (InnerWidth so total = ViewportWidth) and dynamic height
-	borderStyle := BorderStyle.Width(m.layout.InnerWidth).Height(availableHeight).MarginTop(1)
+	// Pad content to fill available height
+	contentLines := strings.Count(content, "\n")
+	if contentLines < mainAvailableHeight {
+		content += strings.Repeat("\n", mainAvailableHeight-contentLines)
+	}
 
+	// Build result with two-box layout
 	var result strings.Builder
-	result.WriteString(borderStyle.Render(b.String()))
-	result.WriteString("\n")
+
+	// First box: Main content (red border)
+	mainBordered := BorderStyle.
+		Width(m.layout.InnerWidth).
+		Height(mainAvailableHeight).
+		Render(content)
+	result.WriteString(mainBordered)
+	result.WriteString("\n") // Spacing between boxes
+
+	// Second box: Help text (white border, 1 row high)
+	var helpText string
 	if m.domainInputActive {
-		result.WriteString(" " + HintStyle.Render("Enter: save | Esc: cancel"))
+		helpText = "Enter: save | Esc: cancel"
 	} else {
-		result.WriteString(" " + HintStyle.Render("A: add domain | D: delete selected | Esc: back"))
+		helpText = "A: add domain | D: delete selected | Esc: back"
 	}
+	textWidth := len(helpText)
+	padding := (m.layout.InnerWidth - textWidth) / 2
+	var footerContent strings.Builder
+	if padding > 0 {
+		footerContent.WriteString(strings.Repeat(" ", padding))
+	}
+	footerContent.WriteString(HintStyle.Render(helpText))
+	// Fill remaining space
+	remaining := m.layout.InnerWidth - padding - textWidth
+	if remaining > 0 {
+		footerContent.WriteString(strings.Repeat(" ", remaining))
+	}
+
+	// Apply white border to footer
+	footerBordered := NewBorderStyleWithColor(colorWhite).
+		Width(m.layout.InnerWidth).
+		Height(1).
+		Render(footerContent.String())
+	result.WriteString(footerBordered)
 
 	return result.String()
 }
@@ -3882,6 +3975,7 @@ func RunMultiRepoTUI(
 			LaunchCachedLayers:       m.launchCachedLayers,
 			LaunchSearchCachedLayers: m.launchSearchCachedLayers,
 			LaunchWayback:            m.launchWayback,
+			LaunchWaybackCache:       m.launchWaybackCache,
 			DockerSearchQuery:        m.launchDockerSearchQuery,
 		}, nil
 	}
@@ -3895,6 +3989,7 @@ type TUIResult struct {
 	LaunchCachedLayers       bool
 	LaunchSearchCachedLayers bool
 	LaunchWayback            bool
+	LaunchWaybackCache       bool
 	DockerSearchQuery        string // pre-filled query for Docker Hub search
 }
 

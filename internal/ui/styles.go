@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -468,8 +469,11 @@ func ApplyTableStyles(t *table.Model) {
 		BorderBottom(true).
 		Bold(true)
 	// Selected: CRITICAL - must have NO background or it interferes with manual selection
-	// Bubbles table has pink default, we strip it in renderTableWithFullWidthSelection via stripANSI
-	s.Selected = s.Selected.Bold(false)
+	// Bubbles table has pink default - we MUST unset it completely
+	s.Selected = s.Selected.
+		Bold(false).
+		Background(lipgloss.NoColor{}).
+		Foreground(lipgloss.NoColor{})
 	// Cell: no extra padding, clear cell foreground
 	s.Cell = s.Cell.UnsetForeground().Padding(0)
 	t.SetStyles(s)

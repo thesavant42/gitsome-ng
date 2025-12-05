@@ -217,8 +217,13 @@ func (m ProjectSelectorModel) View() string {
 	} else {
 		// Select mode: two-box layout
 		// First box: main content (projects list)
+		// Calculate available height: viewport - footer box (3 lines: 1 content + 2 border) - spacing (1 line) - main border overhead (2 lines)
+		mainAvailableHeight := m.height - 6
+		if mainAvailableHeight < 10 {
+			mainAvailableHeight = 10
+		}
+
 		mainContentLines := strings.Count(mainContent, "\n")
-		mainAvailableHeight := m.height - 10 // -3 header, -2 border overhead, -3 footer box, -2 spacing
 		if mainContentLines < mainAvailableHeight {
 			mainContent += strings.Repeat("\n", mainAvailableHeight-mainContentLines)
 		}

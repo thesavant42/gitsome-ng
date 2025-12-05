@@ -17,11 +17,10 @@ import (
 )
 
 const (
-	// Rate limiting - be respectful to the Wayback Machine
-	cdxRequestDelay = 1 * time.Second   // Delay between requests
-	cdxTimeout      = 180 * time.Second // 3 minutes for large domain queries
-	cdxBatchSize    = 100               // Conservative batch size to reduce timeouts
-	// Note: Smaller batches = more requests but fewer timeouts and easier to resume
+	cdxTimeout   = 180 * time.Second // 3 minutes for large domain queries
+	cdxBatchSize = 1000              // Larger batch size for efficiency (1000 records per request)
+	// Note: Larger batches = fewer requests, faster overall
+	// Rate limiting is handled by the caller (e.g., TUI's configurable delay)
 )
 
 // WaybackClient handles Wayback Machine CDX API requests
@@ -97,17 +96,39 @@ func BuildCDXQuery(domain string, resumeKey string) string {
 	return query
 }
 
-// GetCDXPageCount queries the CDX API to get the total number of pages for a domain
-// This is a lightweight call that returns just the page count, not the actual records
-func (c *WaybackClient) GetCDXPageCount(domain string) (int, error) {
+// BuildCDXQueryLatest constructs a query to get the most recent valid record for a URL
+// This is much more efficient than fetching all records when you only need the latest accessible one
+// Uses limit=-1 to get the last result, and filters for valid responses (200 OK or 3xx redirects)
+func BuildCDXQueryLatest(targetURL string) string {
+	// Clean URL: trim whitespace
+	targetURL = strings.TrimSpace(targetURL)
+
+	// Build query for single URL's most recent valid capture
+	// limit=-1: Return only the last result (most recent by timestamp)
+	// filter=statuscode:[23]..: Match 2xx (success) or 3xx (redirect) status codes
+	// Note: Using negative limit returns results from the end (most recent first)
+	query := fmt.Sprintf(
+		"url=%s&output=json&fl=original,timestamp,statuscode,mimetype&limit=-1&filter=statuscode:[23]..",
+		url.QueryEscape(targetURL),
+	)
+
+	return query
+}
+
+// GetCDXRecordCount queries the CDX API to estimate the total number of records for a domain
+// Uses showNumPages to get page count, then estimates records based on ~3000 records per page
+// (CDX pages typically contain up to 3000 records each based on zipnum block size)
+// Note: Includes collapse=urlkey to match the actual fetch query behavior
+func (c *WaybackClient) GetCDXRecordCount(domain string) (int, error) {
 	// Clean domain
 	domain = strings.ToLower(strings.TrimSpace(domain))
 
-	// Build query with showNumPages=true - this returns just the page count
+	// Use showNumPages to get the number of pages
+	// Note: Each page contains approximately 3000 records (zipnum block size)
+	// Include collapse=urlkey to match the actual fetch query
 	rawURL := fmt.Sprintf(
-		"https://web.archive.org/cdx/search/cdx?url=*.%s&output=json&showNumPages=true&pageSize=%d",
+		"https://web.archive.org/cdx/search/cdx?url=*.%s&collapse=urlkey&showNumPages=true",
 		domain,
-		cdxBatchSize,
 	)
 
 	req, err := http.NewRequest("GET", rawURL, nil)
@@ -133,13 +154,103 @@ func (c *WaybackClient) GetCDXPageCount(domain string) (int, error) {
 		return 0, fmt.Errorf("failed to read response: %w", err)
 	}
 
-	// Response is just a number (the page count)
-	numPages, err := strconv.Atoi(strings.TrimSpace(string(body)))
+	// Response should be just a number (the page count)
+	pageCount, err := strconv.Atoi(strings.TrimSpace(string(body)))
 	if err != nil {
-		return 0, fmt.Errorf("failed to parse page count: %w", err)
+		return 0, fmt.Errorf("failed to parse page count: %q", strings.TrimSpace(string(body)))
 	}
 
-	return numPages, nil
+	// Estimate total records: ~3000 records per page (CDX zipnum block size)
+	// This is an approximation; actual count may vary
+	estimatedRecords := pageCount * 3000
+
+	return estimatedRecords, nil
+}
+
+// FetchLatestCDX fetches only the most recent valid (HTTP 200) CDX record for a specific URL
+// This is much more efficient than fetching all records when you only need the latest accessible capture
+// Returns nil if no valid capture exists
+func (c *WaybackClient) FetchLatestCDX(targetURL string) (*models.CDXRecord, error) {
+	// Build raw URL string
+	rawURL := "https://web.archive.org/cdx/search/cdx?" + BuildCDXQueryLatest(targetURL)
+
+	req, err := http.NewRequest("GET", rawURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Set headers emulating a real browser
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("Referer", "https://web.archive.org/")
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("Accept-Encoding", "gzip, deflate")
+	req.Header.Set("Connection", "keep-alive")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("CDX API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Handle gzip-compressed responses
+	var reader io.Reader = resp.Body
+	contentEncoding := strings.ToLower(resp.Header.Get("Content-Encoding"))
+	if strings.Contains(contentEncoding, "gzip") {
+		gzReader, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create gzip reader: %w", err)
+		}
+		defer gzReader.Close()
+		reader = gzReader
+	}
+
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	// Parse JSON response
+	var rawRows [][]string
+	if err := json.Unmarshal(body, &rawRows); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON: %w", err)
+	}
+
+	// Need at least header + 1 data row
+	if len(rawRows) < 2 {
+		return nil, nil // No valid capture found
+	}
+
+	// Skip header row (index 0), get first data row
+	row := rawRows[1]
+	if len(row) < 4 {
+		return nil, nil // Malformed response
+	}
+
+	record := &models.CDXRecord{
+		URL:       row[0],
+		Timestamp: row[1],
+	}
+
+	// Parse status code
+	if row[2] != "" && row[2] != "-" {
+		if code, err := strconv.Atoi(row[2]); err == nil {
+			record.StatusCode = &code
+		}
+	}
+
+	// Parse MIME type
+	if row[3] != "" && row[3] != "-" {
+		mimeType := row[3]
+		record.MimeType = &mimeType
+	}
+
+	return record, nil
 }
 
 // FetchCDX fetches CDX records for a domain with pagination support
@@ -402,21 +513,7 @@ func (c *WaybackClient) FetchAllCDXWithResume(domain string, startResumeKey stri
 
 		resumeKey = resp.ResumeKey
 
-		// Rate limiting - wait before next request
-		select {
-		case <-cancel:
-			return FetchResult{
-				Records:    allRecords,
-				ResumeKey:  resumeKey,
-				IsComplete: false,
-				Error:      fmt.Errorf("cancelled"),
-			}
-		case <-time.After(cdxRequestDelay):
-		}
+		// Note: Rate limiting is handled by the caller (e.g., TUI's doDelayedFetch)
+		// This allows configurable delays rather than hardcoded ones
 	}
-}
-
-// GetRequestDelay returns the delay between CDX API requests
-func GetRequestDelay() time.Duration {
-	return cdxRequestDelay
 }

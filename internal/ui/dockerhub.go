@@ -226,8 +226,8 @@ func (m DockerHubSearchModel) View() string {
 	// Title
 	contentBuilder.WriteString(TitleStyle.Render("Docker Hub Search"))
 	contentBuilder.WriteString("\n")
-	// White divider after title (use TableWidth to fit within bordered content area)
-	contentBuilder.WriteString(strings.Repeat("─", m.layout.TableWidth))
+	// White divider after title (use InnerWidth to fit within bordered content area)
+	contentBuilder.WriteString(strings.Repeat("─", m.layout.InnerWidth))
 	contentBuilder.WriteString("\n\n")
 
 	// Search input or current query
@@ -259,30 +259,59 @@ func (m DockerHubSearchModel) View() string {
 		}
 	}
 
-	// Calculate available height for border (viewport - top margin - footer - border overhead)
-	availableHeight := m.layout.ViewportHeight - 4
-	if availableHeight < 10 {
-		availableHeight = 10
+	// Get the content string
+	content := contentBuilder.String()
+
+	// Calculate available height for main content box
+	// Subtract: footer box (3 lines: 1 content + 2 border) + spacing (1 line) + border overhead (2 lines)
+	mainAvailableHeight := m.layout.ViewportHeight - 6
+	if mainAvailableHeight < 10 {
+		mainAvailableHeight = 10
 	}
 
-	// Wrap in bordered box with BOTH width AND height (fixes Bug #5 - right side not visible)
-	// Border uses InnerWidth for consistency with other screens
-	borderedContent := BorderStyle.
-		Width(m.layout.InnerWidth).
-		Height(availableHeight).
-		Render(contentBuilder.String())
+	// Pad content to fill available height
+	contentLines := strings.Count(content, "\n")
+	if contentLines < mainAvailableHeight {
+		content += strings.Repeat("\n", mainAvailableHeight-contentLines)
+	}
 
+	// Build result with two-box layout
 	var result strings.Builder
-	result.WriteString("\n") // Top margin to avoid terminal edge (OUTSIDE border)
-	result.WriteString(borderedContent)
-	result.WriteString("\n")
 
-	// Help text OUTSIDE border (like main TUI footer)
+	// First box: Main content (red border)
+	mainBordered := BorderStyle.
+		Width(m.layout.InnerWidth).
+		Height(mainAvailableHeight).
+		Render(content)
+	result.WriteString(mainBordered)
+	result.WriteString("\n") // Spacing between boxes
+
+	// Second box: Help text (white border, 1 row high)
+	var helpText string
 	if m.inputMode {
-		result.WriteString(" " + HintStyle.Render("Enter: search | Esc: back to main"))
+		helpText = "Enter: search | Esc: back to main"
 	} else {
-		result.WriteString(" " + HintStyle.Render("Enter: inspect layers | /: new search | n/->: next | p/<-: prev | up/down: navigate | Esc: back"))
+		helpText = "Enter: inspect | /: search | n: next | p: prev | Esc: back"
 	}
+	textWidth := len(helpText)
+	padding := (m.layout.InnerWidth - textWidth) / 2
+	var footerContent strings.Builder
+	if padding > 0 {
+		footerContent.WriteString(strings.Repeat(" ", padding))
+	}
+	footerContent.WriteString(HintStyle.Render(helpText))
+	// Fill remaining space
+	remaining := m.layout.InnerWidth - padding - textWidth
+	if remaining > 0 {
+		footerContent.WriteString(strings.Repeat(" ", remaining))
+	}
+
+	// Apply white border to footer
+	footerBordered := NewBorderStyleWithColor(colorWhite).
+		Width(m.layout.InnerWidth).
+		Height(1).
+		Render(footerContent.String())
+	result.WriteString(footerBordered)
 
 	return result.String()
 }
