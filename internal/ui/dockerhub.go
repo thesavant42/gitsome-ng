@@ -23,6 +23,7 @@ type DockerHubSearchModel struct {
 	textInput         textinput.Model
 	spinner           spinner.Model
 	results           *api.DockerHubSearchResponse
+	filteredResults   []api.DockerHubSearchResult // results after applying type filter
 	query             string
 	page              int
 	searching         bool
@@ -35,7 +36,16 @@ type DockerHubSearchModel struct {
 	cachedImages      map[string]int // image name -> layer count (from DB)
 	pendingSearch     bool           // true when initial search should be triggered on Init
 	layoutInitialized bool           // true after first WindowSizeMsg received
+	filterType        string         // current filter: "all", "image", "user", "model"
 }
+
+// Filter type constants
+const (
+	FilterAll   = "all"
+	FilterImage = "image"
+	FilterUser  = "user"
+	FilterModel = "model"
+)
 
 // DockerHubSearchMsg is sent when search results are ready
 type DockerHubSearchMsg struct {
@@ -82,6 +92,7 @@ func NewDockerHubSearchModel(logger *log.Logger, database *db.DB) DockerHubSearc
 		page:         1,
 		inputMode:    true,
 		cachedImages: make(map[string]int),
+		filterType:   FilterAll,
 	}
 }
 
@@ -193,14 +204,53 @@ func (m DockerHubSearchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.table.MoveDown(1)
 			return m, nil
 
+		case "f":
+			// Cycle through filter types: all -> image -> user -> model -> all
+			switch m.filterType {
+			case FilterAll:
+				m.filterType = FilterImage
+			case FilterImage:
+				m.filterType = FilterUser
+			case FilterUser:
+				m.filterType = FilterModel
+			case FilterModel:
+				m.filterType = FilterAll
+			}
+			m.updateTable()
+			return m, nil
+
+		case "1":
+			// Filter: All
+			m.filterType = FilterAll
+			m.updateTable()
+			return m, nil
+
+		case "2":
+			// Filter: Images only
+			m.filterType = FilterImage
+			m.updateTable()
+			return m, nil
+
+		case "3":
+			// Filter: Users only
+			m.filterType = FilterUser
+			m.updateTable()
+			return m, nil
+
+		case "4":
+			// Filter: Models only
+			m.filterType = FilterModel
+			m.updateTable()
+			return m, nil
+
 		case "enter":
 			// Launch layer inspector for selected image
 			fmt.Println("DEBUG: Enter pressed in table mode")
-			if m.results != nil && len(m.results.Results) > 0 {
+			if len(m.filteredResults) > 0 {
 				cursor := m.table.Cursor()
-				fmt.Printf("DEBUG: cursor=%d, results=%d\n", cursor, len(m.results.Results))
-				if cursor >= 0 && cursor < len(m.results.Results) {
-					selected := m.results.Results[cursor]
+				fmt.Printf("DEBUG: cursor=%d, filteredResults=%d\n", cursor, len(m.filteredResults))
+				if cursor >= 0 && cursor < len(m.filteredResults) {
+					selected := m.filteredResults[cursor]
 					m.selectedImage = selected.Name
 					m.launchInspector = true
 					m.quitting = true
@@ -235,11 +285,28 @@ func (m DockerHubSearchModel) View() string {
 		contentBuilder.WriteString(" Search: ")
 		contentBuilder.WriteString(m.textInput.View())
 	} else {
-		// Show current query and pagination
+		// Show current query, filter, and pagination
 		queryInfo := fmt.Sprintf(" Query: %s", m.query)
 		if m.results != nil {
 			totalPages := (m.results.Total + 24) / 25 // 25 results per page, round up
 			queryInfo += fmt.Sprintf("  |  Page %d of %d  |  Total: %d results", m.page, totalPages, m.results.Total)
+		}
+		// Show filter status
+		filterLabel := ""
+		switch m.filterType {
+		case FilterAll:
+			filterLabel = "[All]"
+		case FilterImage:
+			filterLabel = "[Images]"
+		case FilterUser:
+			filterLabel = "[Users]"
+		case FilterModel:
+			filterLabel = "[Models]"
+		}
+		if m.filterType != FilterAll && m.results != nil {
+			queryInfo += fmt.Sprintf("  |  Filter: %s (%d shown)", filterLabel, len(m.filteredResults))
+		} else if m.filterType != FilterAll {
+			queryInfo += fmt.Sprintf("  |  Filter: %s", filterLabel)
 		}
 		contentBuilder.WriteString(AccentStyle.Render(queryInfo))
 		contentBuilder.WriteString("\n\n")
@@ -292,7 +359,7 @@ func (m DockerHubSearchModel) View() string {
 	if m.inputMode {
 		helpText = "Enter: search | Esc: back to main"
 	} else {
-		helpText = "Enter: inspect | /: search | n: next | p: prev | Esc: back"
+		helpText = "Enter: inspect | /: search | n: next | p: prev | f: filter (1-4) | Esc: back"
 	}
 	textWidth := len(helpText)
 	padding := (m.layout.InnerWidth - textWidth) / 2
@@ -334,41 +401,39 @@ func calculateDockerHubColumns(totalW int) []table.Column {
 
 	// Fixed column widths for compact columns
 	starsW := 6
-	pullsW := 6
-	badgeW := 10
-	fixedTotal := starsW + pullsW + badgeW // = 22
+	cachedW := 8                   // For "[nn] ✓" indicator
+	fixedTotal := starsW + cachedW // = 14
 
 	// Flexible columns share remaining space
 	remaining := totalW - fixedTotal
 
-	// Distribute: Name 25%, Publisher 15%, Description 60%
-	nameW := remaining * 25 / 100
-	publisherW := remaining * 15 / 100
+	// Distribute: Name 28%, Publisher 17%, Description 55%
+	nameW := remaining * 28 / 100
+	publisherW := remaining * 17 / 100
 	descW := remaining - nameW - publisherW // Give remainder to description
 
 	// Ensure minimums
-	if nameW < 15 {
-		nameW = 15
+	if nameW < 20 {
+		nameW = 20
 	}
-	if publisherW < 10 {
-		publisherW = 10
+	if publisherW < 12 {
+		publisherW = 12
 	}
 	if descW < 20 {
 		descW = 20
 	}
 
 	// Verify columns sum to totalW exactly - adjust description
-	actualTotal := nameW + publisherW + starsW + pullsW + badgeW + descW
+	actualTotal := nameW + publisherW + starsW + cachedW + descW
 	if actualTotal != totalW {
 		descW += (totalW - actualTotal)
 	}
 
 	return []table.Column{
 		{Title: "Name", Width: nameW},
-		{Title: "Publish.", Width: publisherW},
+		{Title: "Publisher", Width: publisherW},
 		{Title: "Stars", Width: starsW},
-		{Title: "Pulls", Width: pullsW},
-		{Title: "Badge", Width: badgeW},
+		{Title: "Cached", Width: cachedW},
 		{Title: "Description", Width: descW},
 	}
 }
@@ -401,6 +466,30 @@ func (m *DockerHubSearchModel) updateTable() {
 		}
 	}
 
+	// Apply type filter to results
+	m.filteredResults = nil
+	for _, r := range m.results.Results {
+		switch m.filterType {
+		case FilterAll:
+			m.filteredResults = append(m.filteredResults, r)
+		case FilterImage:
+			// Docker Hub uses "image" type for containers
+			if r.Type == "image" {
+				m.filteredResults = append(m.filteredResults, r)
+			}
+		case FilterUser:
+			// Docker Hub may use "user" or we check if name contains only the publisher (no slash)
+			if r.Type == "user" || (r.Type == "" && !strings.Contains(r.Name, "/")) {
+				m.filteredResults = append(m.filteredResults, r)
+			}
+		case FilterModel:
+			// Docker Hub AI models have "model" type
+			if r.Type == "model" {
+				m.filteredResults = append(m.filteredResults, r)
+			}
+		}
+	}
+
 	// Get column widths from central calculation function (uses TableWidth for bubbles overhead)
 	columns := calculateDockerHubColumns(m.layout.TableWidth)
 
@@ -408,9 +497,8 @@ func (m *DockerHubSearchModel) updateTable() {
 	nameW := columns[0].Width
 	publisherW := columns[1].Width
 	starsW := columns[2].Width
-	pullsW := columns[3].Width
-	badgeW := columns[4].Width
-	descW := columns[5].Width
+	cachedW := columns[3].Width
+	descW := columns[4].Width
 
 	// Helper to truncate string to width
 	truncate := func(s string, w int) string {
@@ -423,35 +511,26 @@ func (m *DockerHubSearchModel) updateTable() {
 		return s[:w-3] + "..."
 	}
 
-	rows := make([]table.Row, len(m.results.Results))
-	for i, r := range m.results.Results {
+	rows := make([]table.Row, len(m.filteredResults))
+	for i, r := range m.filteredResults {
 		desc := truncate(r.ShortDescription, descW)
 
-		var badge string
-		switch r.Badge {
-		case "verified_publisher":
-			badge = "Verified"
-		case "official":
-			badge = "Official"
+		// Check if we have cached layer data for this image
+		var cachedStr string
+		if layerCount, ok := m.cachedImages[r.Name]; ok {
+			cachedStr = fmt.Sprintf("[%d] ✓", layerCount)
 		}
 
-		// Add cached indicator to name if we have layer data
-		name := r.Name
-		if layerCount, ok := m.cachedImages[r.Name]; ok {
-			name = fmt.Sprintf("[%d] %s", layerCount, r.Name)
-		}
-		name = truncate(name, nameW)
+		name := truncate(r.Name, nameW)
 		publisher := truncate(r.Publisher, publisherW)
 		stars := truncate(fmt.Sprintf("%d", r.StarCount), starsW)
-		pulls := truncate(r.PullCount, pullsW)
-		badge = truncate(badge, badgeW)
+		cachedStr = truncate(cachedStr, cachedW)
 
 		rows[i] = table.Row{
 			name,
 			publisher,
 			stars,
-			pulls,
-			badge,
+			cachedStr,
 			desc,
 		}
 	}
