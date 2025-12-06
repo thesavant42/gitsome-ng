@@ -238,7 +238,8 @@ func (m DockerHubSearchModel) View() string {
 		// Show current query and pagination
 		queryInfo := fmt.Sprintf(" Query: %s", m.query)
 		if m.results != nil {
-			queryInfo += fmt.Sprintf("  |  Page %d  |  Total: %d results", m.page, m.results.Total)
+			totalPages := (m.results.Total + 24) / 25 // 25 results per page, round up
+			queryInfo += fmt.Sprintf("  |  Page %d of %d  |  Total: %d results", m.page, totalPages, m.results.Total)
 		}
 		contentBuilder.WriteString(AccentStyle.Render(queryInfo))
 		contentBuilder.WriteString("\n\n")
@@ -331,36 +332,40 @@ func calculateDockerHubColumns(totalW int) []table.Column {
 		totalW = 50
 	}
 
-	// Fixed column widths - keep small to leave room for Description
-	nameW := 14
-	publisherW := 8
-	starsW := 5
-	pullsW := 5
-	badgeW := 8
-	fixedTotal := nameW + publisherW + starsW + pullsW + badgeW // = 40
+	// Fixed column widths for compact columns
+	starsW := 6
+	pullsW := 6
+	badgeW := 10
+	fixedTotal := starsW + pullsW + badgeW // = 22
 
-	// Description gets remaining space - ensure columns sum exactly to totalW
-	descW := totalW - fixedTotal
-	if descW < 10 {
-		// If description too small, shrink other columns proportionally
-		descW = 10
-		shrink := fixedTotal + descW - totalW
-		// Shrink name column (largest flexible column)
-		if nameW > shrink {
-			nameW -= shrink
-		}
+	// Flexible columns share remaining space
+	remaining := totalW - fixedTotal
+
+	// Distribute: Name 25%, Publisher 15%, Description 60%
+	nameW := remaining * 25 / 100
+	publisherW := remaining * 15 / 100
+	descW := remaining - nameW - publisherW // Give remainder to description
+
+	// Ensure minimums
+	if nameW < 15 {
+		nameW = 15
+	}
+	if publisherW < 10 {
+		publisherW = 10
+	}
+	if descW < 20 {
+		descW = 20
 	}
 
-	// Verify columns sum to totalW exactly
+	// Verify columns sum to totalW exactly - adjust description
 	actualTotal := nameW + publisherW + starsW + pullsW + badgeW + descW
 	if actualTotal != totalW {
-		// Adjust description to make exact match
 		descW += (totalW - actualTotal)
 	}
 
 	return []table.Column{
 		{Title: "Name", Width: nameW},
-		{Title: "Publisher", Width: publisherW},
+		{Title: "Publish.", Width: publisherW},
 		{Title: "Stars", Width: starsW},
 		{Title: "Pulls", Width: pullsW},
 		{Title: "Badge", Width: badgeW},

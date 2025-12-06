@@ -53,20 +53,19 @@ var linkColors = LinkColors
 
 // Menu options
 var menuOptions = []string{
-	"View Repositories",
-	"Configure Highlight Domains",
-	"Add Repository",
-	"Query Tagged Users",
-	"Search",
-	"Docker Hub Search",
-	"Browse Cached Layers",
-	"Search Cached Layers",
-	"Wayback Machine",
-	"Browse Wayback Cache",
-	"Switch Project",
-	"Export Tab to Markdown",
-	"Export Database Backup",
-	"Export Project Report",
+	"[V]iew Repositories",
+	"[C]onfigure Highlight Domains",
+	"[A]dd Repository",
+	"[Q]uery Tagged Users",
+	"Keyword [s]earch",
+	"[D]ocker Hub Search",
+	"[B]rowse Cached Docker Layers",
+	"[S]earch Cached Layers",
+	"Search [W]ayback Machine",
+	"Browse [w]ayback Cache",
+	"[E]xport Tab to Markdown",
+	"[e]xport Database Backup",
+	"e[X]port Project Report",
 }
 
 // Search query options
@@ -1353,9 +1352,15 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // handleMenu handles key events when the menu is visible (menu is the HOME screen)
 func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "esc", "ctrl+c":
+	case "ctrl+c":
 		// Quit application from menu (home screen)
 		m.quitting = true
+		return m, tea.Quit
+
+	case "esc":
+		// Return to project selector
+		m.quitting = true
+		m.switchProject = true
 		return m, tea.Quit
 
 	case "up", "k":
@@ -1367,6 +1372,140 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "down", "j":
 		if m.menuCursor < len(menuOptions)-1 {
 			m.menuCursor++
+		}
+		return m, nil
+
+	// Hotkey shortcuts for menu items
+	case "V":
+		m.menuCursor = 0
+		// Fall through to execute
+		m.menuVisible = false
+		m.repoViewVisible = true
+		return m, nil
+	case "C":
+		m.menuCursor = 1
+		m.menuVisible = false
+		m.domainConfigVisible = true
+		m.domainCursor = 0
+		m.domainInput = ""
+		m.domainInputActive = false
+		return m, nil
+	case "A":
+		m.menuCursor = 2
+		m.menuVisible = false
+		m.addRepoVisible = true
+		m.addRepoInput = ""
+		m.addRepoInputActive = true
+		return m, nil
+	case "Q":
+		m.menuCursor = 3
+		// Query Tagged Users - inline the logic
+		m.menuVisible = false
+		if m.database != nil && m.token != "" {
+			taggedUsers, err := m.database.GetTaggedUsersWithLogins(m.repoOwner, m.repoName)
+			if err != nil || len(taggedUsers) == 0 {
+				m.exportMessage = "No tagged users with GitHub logins found"
+			} else {
+				var logins []string
+				seenLogins := make(map[string]bool)
+				for _, u := range taggedUsers {
+					if m.processedLogins != nil && m.processedLogins[u.GitHubLogin] {
+						continue
+					}
+					if seenLogins[u.GitHubLogin] {
+						continue
+					}
+					seenLogins[u.GitHubLogin] = true
+					logins = append(logins, u.GitHubLogin)
+				}
+				if len(logins) == 0 {
+					m.exportMessage = "All tagged users have already been processed"
+				} else {
+					m.queryingUsers = true
+					m.queryTotal = len(logins)
+					m.queryCompleted = 0
+					m.queryFailed = 0
+					m.showProgress = true
+					m.progressPercent = 0.0
+					m.progressLabel = fmt.Sprintf("Querying users... 0/%d", len(logins))
+					if len(logins) > 1 {
+						m.queryLoginsToFetch = logins[1:]
+					}
+					cmd := m.progressBar.SetPercent(m.progressPercent)
+					return m, tea.Batch(cmd, m.startUserQuery(logins[0], 1, m.queryTotal))
+				}
+			}
+		} else if m.token == "" {
+			m.exportMessage = "GitHub token required for user queries"
+		}
+		return m, nil
+	case "s": // lowercase - Keyword Search
+		m.menuCursor = 4
+		m.menuVisible = false
+		m.searchPickerVisible = true
+		m.searchPickerCursor = 0
+		return m, nil
+	case "D":
+		m.menuCursor = 5
+		m.quitting = true
+		m.launchDockerSearch = true
+		return m, tea.Quit
+	case "B":
+		m.menuCursor = 6
+		m.quitting = true
+		m.launchCachedLayers = true
+		return m, tea.Quit
+	case "S": // uppercase - Search Cached Layers
+		m.menuCursor = 7
+		m.quitting = true
+		m.launchSearchCachedLayers = true
+		return m, tea.Quit
+	case "W":
+		m.menuCursor = 8
+		m.quitting = true
+		m.launchWayback = true
+		return m, tea.Quit
+	case "w": // lowercase - Browse Wayback Cache
+		m.menuCursor = 9
+		m.quitting = true
+		m.launchWaybackCache = true
+		return m, tea.Quit
+	case "E":
+		m.menuCursor = 10
+		m.menuVisible = false
+		filename, err := ExportTabToMarkdown(m.stats, m.repoOwner, m.repoName, m.totalCommits, m.showCombined)
+		if err != nil {
+			m.exportMessage = fmt.Sprintf("Export failed: %v", err)
+		} else {
+			m.exportMessage = fmt.Sprintf("Exported to %s", filename)
+		}
+		return m, nil
+	case "e": // lowercase - Export Database Backup
+		m.menuCursor = 11
+		m.menuVisible = false
+		if m.dbPath != "" {
+			filename, err := ExportDatabaseBackup(m.dbPath)
+			if err != nil {
+				m.exportMessage = fmt.Sprintf("Backup failed: %v", err)
+			} else {
+				m.exportMessage = fmt.Sprintf("Database backed up to %s", filename)
+			}
+		} else {
+			m.exportMessage = "Database path not available"
+		}
+		return m, nil
+	case "X":
+		m.menuCursor = 12
+		m.menuVisible = false
+		if m.database != nil {
+			filename, err := ExportProjectReport(m.database, m.dbPath)
+			if err != nil {
+				m.exportMessage = fmt.Sprintf("Project report failed: %v", err)
+			} else {
+				m.exportMessage = fmt.Sprintf("Project report exported to %s", filename)
+			}
+		} else {
+			m.exportMessage = "Database not available"
 		}
 		return m, nil
 
@@ -1458,11 +1597,7 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			m.launchWaybackCache = true
 			return m, tea.Quit
-		case 10: // Switch Project
-			m.quitting = true
-			m.switchProject = true
-			return m, tea.Quit
-		case 11: // Export Tab to Markdown
+		case 10: // Export Tab to Markdown
 			m.menuVisible = false
 			filename, err := ExportTabToMarkdown(m.stats, m.repoOwner, m.repoName, m.totalCommits, m.showCombined)
 			if err != nil {
@@ -1470,7 +1605,7 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.exportMessage = fmt.Sprintf("Exported to %s", filename)
 			}
-		case 12: // Export Database Backup
+		case 11: // Export Database Backup
 			m.menuVisible = false
 			if m.dbPath != "" {
 				filename, err := ExportDatabaseBackup(m.dbPath)
@@ -1482,7 +1617,7 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.exportMessage = "Database path not available"
 			}
-		case 13: // Export Project Report
+		case 12: // Export Project Report
 			m.menuVisible = false
 			if m.database != nil {
 				filename, err := ExportProjectReport(m.database, m.dbPath)
@@ -3522,7 +3657,7 @@ func (m TUIModel) renderMenu() string {
 	menuSelectedStyle := SelectedStyle.Width(m.layout.InnerWidth)
 	menuNormalStyle := NormalStyle.Width(m.layout.InnerWidth)
 
-	menuContent.WriteString(TitleStyle.Render("Menu"))
+	menuContent.WriteString(TitleStyle.Render("  Menu"))
 	menuContent.WriteString("\n")
 	// White divider after title
 	menuContent.WriteString(strings.Repeat("─", m.layout.InnerWidth))
@@ -3565,7 +3700,7 @@ func (m TUIModel) renderMenu() string {
 	result.WriteString("\n") // Spacing between boxes
 
 	// Second box: Help text (1 row high) - anchored at bottom
-	helpText := "Enter: select | Esc: exit"
+	helpText := "Enter: select | Esc: switch project | Ctrl+C: quit"
 	textWidth := len(helpText)
 	padding := (m.layout.InnerWidth - textWidth) / 2
 	var footerContent strings.Builder
@@ -3594,7 +3729,7 @@ func (m TUIModel) renderDomainConfig() string {
 	// Build main content
 	var mainContent strings.Builder
 
-	mainContent.WriteString(TitleStyle.Render("Configure Highlight Domains"))
+	mainContent.WriteString(TitleStyle.Render("[C]onfigure Highlight Domains"))
 	mainContent.WriteString("\n")
 	// White divider after title
 	mainContent.WriteString(strings.Repeat("─", m.layout.InnerWidth))
