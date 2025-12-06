@@ -701,10 +701,10 @@ var ProgressEmptyStyle = styleRenderer{render: func(s string) string { return st
 
 // styleRenderer provides a Render method for compatibility
 type styleRenderer struct {
-	render     func(string) string
-	width      int
-	boldFlag   bool
-	renderFunc func(string) string // The base render function
+	render   func(string) string
+	width    int
+	boldFlag bool
+	//renderFunc func(string) string // The base render function
 }
 
 func (s styleRenderer) Render(text string) string {

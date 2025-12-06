@@ -49,7 +49,7 @@ type userQueryCompleteMsg struct {
 
 // Color palette for link groups - use from styles.go
 // (keeping local reference for compatibility)
-var linkColors = LinkColors
+//var linkColors = LinkColors
 
 // Menu options - items starting with "---" are section headers (not selectable)
 var menuOptions = []string{

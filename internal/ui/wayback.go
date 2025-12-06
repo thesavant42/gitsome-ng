@@ -88,10 +88,10 @@ const (
 )
 
 // Wayback table view layout constants
-const (
-	waybackContentBeforeTable = 6 // Lines before table: title(1) + \n(1) + sep(1) + \n\n(2) + queryInfo(1) + \n(1) = 6, minus table header/divider(2) = net 4
-	waybackTableHeaderLines   = 2 // Header row + divider = 2
-)
+//const (
+//	waybackContentBeforeTable = 6 // Lines before table: title(1) + \n(1) + sep(1) + \n\n(2) + queryInfo(1) + \n(1) = 6, minus table header/divider(2) = net 4
+//	waybackTableHeaderLines   = 2 // Header row + divider = 2
+//)
 
 // getRequestDelay returns the delay as a time.Duration
 func getRequestDelay(delayMs int) time.Duration {
