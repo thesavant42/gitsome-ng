@@ -55,9 +55,9 @@ type userQueryCompleteMsg struct {
 var menuOptions = []string{
 	"",
 	"---  GitHub",
-	"  [V]iew Repositories",
-	"  [A]dd Repository",
-	"  [Q]uery Tagged Users",
+	"  [V]iew cached GitHub Repositories Commit Metadata",
+	"  [A]dd Repository to Metadatabase",
+	"  [Q]uery Tagged GitHub DUsers",
 	"  Keyword [s]earch",
 	"",
 	"",
@@ -1401,13 +1401,12 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Hotkey shortcuts for menu items
 	case "V":
-		m.menuCursor = 0
-		// Fall through to execute
+		m.menuCursor = 2
 		m.menuVisible = false
 		m.repoViewVisible = true
 		return m, nil
 	case "C":
-		m.menuCursor = 1
+		m.menuCursor = 20
 		m.menuVisible = false
 		m.domainConfigVisible = true
 		m.domainCursor = 0
@@ -1415,14 +1414,14 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.domainInputActive = false
 		return m, nil
 	case "A":
-		m.menuCursor = 2
+		m.menuCursor = 3
 		m.menuVisible = false
 		m.addRepoVisible = true
 		m.addRepoInput = ""
 		m.addRepoInputActive = true
 		return m, nil
 	case "Q":
-		m.menuCursor = 3
+		m.menuCursor = 4
 		// Query Tagged Users - inline the logic
 		m.menuVisible = false
 		if m.database != nil && m.token != "" {
@@ -1464,38 +1463,38 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "s": // lowercase - Keyword Search
-		m.menuCursor = 4
+		m.menuCursor = 5
 		m.menuVisible = false
 		m.searchPickerVisible = true
 		m.searchPickerCursor = 0
 		return m, nil
 	case "D":
-		m.menuCursor = 5
+		m.menuCursor = 9
 		m.quitting = true
 		m.launchDockerSearch = true
 		return m, tea.Quit
 	case "B":
-		m.menuCursor = 6
+		m.menuCursor = 10
 		m.quitting = true
 		m.launchCachedLayers = true
 		return m, tea.Quit
 	case "S": // uppercase - Search Cached Layers
-		m.menuCursor = 7
+		m.menuCursor = 11
 		m.quitting = true
 		m.launchSearchCachedLayers = true
 		return m, tea.Quit
 	case "W":
-		m.menuCursor = 8
+		m.menuCursor = 15
 		m.quitting = true
 		m.launchWayback = true
 		return m, tea.Quit
 	case "w": // lowercase - Browse Wayback Cache
-		m.menuCursor = 9
+		m.menuCursor = 16
 		m.quitting = true
 		m.launchWaybackCache = true
 		return m, tea.Quit
 	case "E":
-		m.menuCursor = 10
+		m.menuCursor = 21
 		m.menuVisible = false
 		filename, err := ExportTabToMarkdown(m.stats, m.repoOwner, m.repoName, m.totalCommits, m.showCombined)
 		if err != nil {
@@ -1505,7 +1504,7 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "e": // lowercase - Export Database Backup
-		m.menuCursor = 11
+		m.menuCursor = 22
 		m.menuVisible = false
 		if m.dbPath != "" {
 			filename, err := ExportDatabaseBackup(m.dbPath)
@@ -1519,7 +1518,7 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "X":
-		m.menuCursor = 12
+		m.menuCursor = 23
 		m.menuVisible = false
 		if m.database != nil {
 			filename, err := ExportProjectReport(m.database, m.dbPath)
@@ -1534,24 +1533,18 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "enter":
-		// Handle menu selection
+		// Handle menu selection based on actual menuOptions indices
+		// Headers (---) and spacers ("") are skipped by navigation
 		switch m.menuCursor {
-		case 0: // View Repositories
+		case 2: // [V]iew Repositories
 			m.menuVisible = false
 			m.repoViewVisible = true
-			// Show the repository table view
-		case 1: // Configure Highlight Domains
-			m.menuVisible = false
-			m.domainConfigVisible = true
-			m.domainCursor = 0
-			m.domainInput = ""
-			m.domainInputActive = false
-		case 2: // Add Repository
+		case 3: // [A]dd Repository
 			m.menuVisible = false
 			m.addRepoVisible = true
 			m.addRepoInput = ""
 			m.addRepoInputActive = true
-		case 3: // Query Tagged Users
+		case 4: // [Q]uery Tagged Users
 			m.menuVisible = false
 			if m.database != nil && m.token != "" {
 				// Get tagged users with GitHub logins
@@ -1597,31 +1590,37 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else if m.token == "" {
 				m.exportMessage = "GitHub token required for user queries"
 			}
-		case 4: // Search
+		case 5: // Keyword [s]earch
 			m.menuVisible = false
 			m.searchPickerVisible = true
 			m.searchPickerCursor = 0
-		case 5: // Docker Hub Search
+		case 9: // [D]ocker Hub Search
 			m.quitting = true
 			m.launchDockerSearch = true
 			return m, tea.Quit
-		case 6: // Browse Cached Layers
+		case 10: // [B]rowse Cached Layers
 			m.quitting = true
 			m.launchCachedLayers = true
 			return m, tea.Quit
-		case 7: // Search Cached Layers
+		case 11: // [S]earch Cached Layers
 			m.quitting = true
 			m.launchSearchCachedLayers = true
 			return m, tea.Quit
-		case 8: // Wayback Machine
+		case 15: // Search [W]ayback Machine
 			m.quitting = true
 			m.launchWayback = true
 			return m, tea.Quit
-		case 9: // Browse Wayback Cache
+		case 16: // Browse [w]ayback Cache
 			m.quitting = true
 			m.launchWaybackCache = true
 			return m, tea.Quit
-		case 10: // Export Tab to Markdown
+		case 20: // [C]onfigure Highlight Domains
+			m.menuVisible = false
+			m.domainConfigVisible = true
+			m.domainCursor = 0
+			m.domainInput = ""
+			m.domainInputActive = false
+		case 21: // [E]xport Tab to Markdown
 			m.menuVisible = false
 			filename, err := ExportTabToMarkdown(m.stats, m.repoOwner, m.repoName, m.totalCommits, m.showCombined)
 			if err != nil {
@@ -1629,7 +1628,7 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.exportMessage = fmt.Sprintf("Exported to %s", filename)
 			}
-		case 11: // Export Database Backup
+		case 22: // [e]xport Database Backup
 			m.menuVisible = false
 			if m.dbPath != "" {
 				filename, err := ExportDatabaseBackup(m.dbPath)
@@ -1641,7 +1640,7 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.exportMessage = "Database path not available"
 			}
-		case 12: // Export Project Report
+		case 23: // e[X]port Project Report
 			m.menuVisible = false
 			if m.database != nil {
 				filename, err := ExportProjectReport(m.database, m.dbPath)
