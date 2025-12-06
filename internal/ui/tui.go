@@ -51,21 +51,49 @@ type userQueryCompleteMsg struct {
 // (keeping local reference for compatibility)
 var linkColors = LinkColors
 
-// Menu options
+// Menu options - items starting with "---" are section headers (not selectable)
 var menuOptions = []string{
-	"[V]iew Repositories",
-	"[C]onfigure Highlight Domains",
-	"[A]dd Repository",
-	"[Q]uery Tagged Users",
-	"Keyword [s]earch",
-	"[D]ocker Hub Search",
-	"[B]rowse Cached Docker Layers",
-	"[S]earch Cached Layers",
-	"Search [W]ayback Machine",
-	"Browse [w]ayback Cache",
-	"[E]xport Tab to Markdown",
-	"[e]xport Database Backup",
-	"e[X]port Project Report",
+	"",
+	"---  GitHub",
+	"  [V]iew Repositories",
+	"  [A]dd Repository",
+	"  [Q]uery Tagged Users",
+	"  Keyword [s]earch",
+	"",
+	"",
+	"---  Docker Hub",
+	"  [D]ocker Hub Search",
+	"  [B]rowse Cached Docker Layers",
+	"  [S]earch Cached Layers",
+	"",
+	"",
+	"---  Wayback CDX Records",
+	"  Search [W]ayback Machine",
+	"  Browse [w]ayback Cache",
+	"",
+	"",
+	"---  System",
+	"  [C]onfigure Highlight Domains",
+	"  [E]xport Tab to Markdown",
+	"  [e]xport Database Backup",
+	"  e[X]port Project Report",
+}
+
+// isMenuHeader returns true if the menu item is a section header or spacer
+func isMenuHeader(option string) bool {
+	return strings.HasPrefix(option, "---") || option == ""
+}
+
+// getNextSelectableMenuItem finds the next selectable menu item in the given direction
+func getNextSelectableMenuItem(current int, direction int) int {
+	next := current + direction
+	for next >= 0 && next < len(menuOptions) {
+		if !isMenuHeader(menuOptions[next]) {
+			return next
+		}
+		next += direction
+	}
+	return current // Stay at current if no valid item found
 }
 
 // Search query options
@@ -1364,15 +1392,11 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case "up", "k":
-		if m.menuCursor > 0 {
-			m.menuCursor--
-		}
+		m.menuCursor = getNextSelectableMenuItem(m.menuCursor, -1)
 		return m, nil
 
 	case "down", "j":
-		if m.menuCursor < len(menuOptions)-1 {
-			m.menuCursor++
-		}
+		m.menuCursor = getNextSelectableMenuItem(m.menuCursor, 1)
 		return m, nil
 
 	// Hotkey shortcuts for menu items
@@ -3661,9 +3685,24 @@ func (m TUIModel) renderMenu() string {
 	menuContent.WriteString("\n")
 	// White divider after title
 	menuContent.WriteString(strings.Repeat("─", m.layout.InnerWidth))
-	menuContent.WriteString("\n\n")
+	menuContent.WriteString("\n")
 
 	for i, option := range menuOptions {
+		// Empty string = spacer row
+		if option == "" {
+			menuContent.WriteString("\n")
+			continue
+		}
+		// Section header - label above divider
+		if strings.HasPrefix(option, "---") {
+			label := strings.TrimPrefix(option, "---")
+			menuContent.WriteString(NormalStyle.Render(label))
+			menuContent.WriteString("\n")
+			menuContent.WriteString(strings.Repeat("─", m.layout.InnerWidth))
+			menuContent.WriteString("\n")
+			continue
+		}
+		// Regular menu item
 		if i == m.menuCursor {
 			menuContent.WriteString(menuSelectedStyle.Render("> " + option))
 		} else {
@@ -3700,7 +3739,7 @@ func (m TUIModel) renderMenu() string {
 	result.WriteString("\n") // Spacing between boxes
 
 	// Second box: Help text (1 row high) - anchored at bottom
-	helpText := "Enter: select | Esc: switch project | Ctrl+C: quit"
+	helpText := "[V]iew [C]onfig [A]dd [Q]uery [s]earch [D]ocker [B]rowse [S]earch [W]ayback [w]ayback [E]xport [e]xport e[X]port | Esc: back | Ctrl+C: quit"
 	textWidth := len(helpText)
 	padding := (m.layout.InnerWidth - textWidth) / 2
 	var footerContent strings.Builder
