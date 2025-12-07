@@ -55,7 +55,7 @@ func NewSelectorModel(cfg SelectorConfig) SelectorModel {
 	// Default help text if not provided
 	helpText := cfg.HelpText
 	if helpText == "" {
-		helpText = "↑/↓: navigate | Enter: select | q/Esc: cancel"
+		helpText = "↑/↓: navigate | Enter: select | Esc: cancel"
 	}
 	cfg.HelpText = helpText
 

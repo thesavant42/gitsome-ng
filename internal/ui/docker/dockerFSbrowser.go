@@ -345,7 +345,7 @@ func (m fsBrowserModel) View() string {
 	b.WriteString(borderedContent)
 	b.WriteString("\n")
 
-	b.WriteString(" " + ui.HintStyle.Render("enter: open | backspace: up | d: download | q/esc: back"))
+	b.WriteString(" " + ui.HintStyle.Render("enter: open | backspace: up | d: download | esc: back"))
 
 	return b.String()
 }

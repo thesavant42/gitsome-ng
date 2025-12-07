@@ -388,7 +388,7 @@ func (m fsBrowserModel) View() string {
 	b.WriteString("\n")
 
 	// Help footer below border
-	b.WriteString(" " + HintStyle.Render("enter: open | backspace: up | d: download | q/esc: back"))
+	b.WriteString(" " + HintStyle.Render("enter: open | backspace: up | d: download | esc: back"))
 
 	return b.String()
 }
@@ -441,9 +441,9 @@ func runLayerSelectorTabbedTUI(imageRef string, layers []api.Layer, buildSteps [
 
 	// Set help text
 	if len(buildSteps) > 0 {
-		builder.WithHelpText("↑/↓: navigate | Tab/←/→: build steps | Enter: select | q/Esc: back")
+		builder.WithHelpText("↑/↓: navigate | Tab/←/→: build steps | Enter: select | Esc: back")
 	} else {
-		builder.WithHelpText("↑/↓: navigate | Enter: select | q/Esc: back")
+		builder.WithHelpText("↑/↓: navigate | Enter: select | Esc: back")
 	}
 
 	// Run the tabbed table
@@ -836,7 +836,7 @@ func runPlatformSelectorTUI(platforms []api.Platform) (int, error) {
 	return RunSelector(SelectorConfig{
 		Title:    "Select Platform",
 		Subtitle: fmt.Sprintf("%d platforms available", len(platforms)),
-		HelpText: "↑/↓: navigate | Enter: select | q/Esc: back",
+		HelpText: "↑/↓: navigate | Enter: select | Esc: back",
 		Items:    items,
 	})
 }
@@ -857,7 +857,7 @@ func runLayerActionSelectorTUI(currentLayer, totalLayers int, sourceLabel string
 
 	idx, err := RunSelector(SelectorConfig{
 		Title:    fmt.Sprintf("Layer %d/%d (%s) - What next?", currentLayer, totalLayers, sourceLabel),
-		HelpText: "↑/↓: navigate | Enter: select | q/Esc: done",
+		HelpText: "↑/↓: navigate | Enter: select | Esc: done",
 		Items:    actionLabels,
 		Values:   actions,
 	})
@@ -879,7 +879,7 @@ func runTagSelectorTUI(imageName string, tags []string) (string, error) {
 	idx, err := RunSelector(SelectorConfig{
 		Title:    fmt.Sprintf("Select tag for %s", imageName),
 		Subtitle: fmt.Sprintf("%d tags available", len(tags)),
-		HelpText: "↑/↓: navigate | Enter: select | q/Esc: back",
+		HelpText: "↑/↓: navigate | Enter: select | Esc: back",
 		Items:    tags,
 	})
 	if err != nil {
@@ -1016,7 +1016,7 @@ func RunCachedLayersBrowser(database *db.DB) error {
 		// Use TabbedTableModel (single page for cached images)
 		result, err := NewTabbedTable("Cached Layer Inspections").
 			WithSubtitle(fmt.Sprintf("%d images in cache", len(rows))).
-			WithHelpText("Enter: select | q/Esc: back").
+			WithHelpText("Enter: select | Esc: back").
 			AddPage("Images", CachedImagesColumns(), tableRows).
 			Run()
 
@@ -1084,9 +1084,9 @@ func showCachedLayersForImage(database *db.DB, imageRef string) error {
 		if len(buildSteps) > 0 {
 			buildStepsRows := buildBuildStepsRows(buildSteps)
 			builder.AddReadOnlyPage("Build Steps", BuildStepsColumns(), buildStepsRows)
-			builder.WithHelpText("↑/↓: navigate | Tab/←/→: build steps | Enter: browse | q/Esc: back")
+			builder.WithHelpText("↑/↓: navigate | Tab/←/→: build steps | Enter: browse | Esc: back")
 		} else {
-			builder.WithHelpText("↑/↓: navigate | Enter: browse | q/Esc: back")
+			builder.WithHelpText("↑/↓: navigate | Enter: browse | Esc: back")
 		}
 
 		result, err := builder.Run()
@@ -1327,7 +1327,7 @@ func (m searchModel) View() string {
 	if m.inputMode {
 		helpText = "Enter: search | Esc: back"
 	} else {
-		helpText = "/: new search | q/Esc: back"
+		helpText = "/: new search | Esc: back"
 	}
 	textWidth := len(helpText)
 	padding := (m.layout.InnerWidth - textWidth) / 2

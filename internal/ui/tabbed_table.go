@@ -82,9 +82,9 @@ func NewTabbedTableModel(cfg TabbedTableConfig) TabbedTableModel {
 	// Default help text
 	if cfg.HelpText == "" {
 		if len(cfg.Pages) > 1 {
-			cfg.HelpText = "↑/↓: navigate | Tab/←/→: switch page | Enter: select | q/Esc: back"
+			cfg.HelpText = "↑/↓: navigate | Tab/←/→: switch page | Enter: select | Esc: back"
 		} else {
-			cfg.HelpText = "↑/↓: navigate | Enter: select | q/Esc: back"
+			cfg.HelpText = "↑/↓: navigate | Enter: select | Esc: back"
 		}
 	}
 
@@ -95,11 +95,13 @@ func NewTabbedTableModel(cfg TabbedTableConfig) TabbedTableModel {
 		columns := CalculateColumns(page.Columns, layout.TableWidth)
 
 		// Create table with standard initialization
+		// Use calculateTableHeight to compute dynamic height based on config
+		tableHeight := calculateTableHeight(cfg, layout)
 		t := table.New(
 			table.WithColumns(columns),
 			table.WithRows(page.Rows),
 			table.WithFocused(i == 0), // Only first page is focused initially
-			table.WithHeight(layout.TabbedTableHeight()),
+			table.WithHeight(tableHeight),
 		)
 		ApplyTableStyles(&t)
 		t.GotoTop()
@@ -117,6 +119,53 @@ func NewTabbedTableModel(cfg TabbedTableConfig) TabbedTableModel {
 			Cancelled:    false,
 		},
 	}
+}
+
+// =============================================================================
+// Height Calculation - Dynamic based on actual content
+// =============================================================================
+
+// calculateTableHeight computes the actual table height based on content overhead.
+// This is critical to prevent rows from being hidden behind viewport boundaries.
+func calculateTableHeight(cfg TabbedTableConfig, layout Layout) int {
+	// Calculate content lines BEFORE table in View():
+	// - Title + newline = 2 lines
+	contentLines := 2
+
+	// - Tab indicator (if multiple pages) + newline = 2 lines
+	if len(cfg.Pages) > 1 {
+		contentLines += 2
+	}
+
+	// - Divider + 2 newlines = 3 lines
+	contentLines += 3
+
+	// - Subtitle (if present) + 2 newlines = 3 lines
+	if cfg.Subtitle != "" {
+		contentLines += 3
+	}
+
+	// RenderTableWithSelection adds:
+	// - Header row (1 line)
+	// - Extra divider after header (1 line)
+	// - Data rows (N lines based on height)
+	// So we need to account for header + divider = 2 extra lines
+	const tableHeaderOverhead = 2
+
+	// Total overhead: TwoBoxView adds main box borders (2) + footer (3) + spacing (1) = 6
+	// Plus our content lines before the table
+	// Plus table's own header rendering overhead
+	totalOverhead := 6 + contentLines + tableHeaderOverhead
+
+	// Available height for table DATA ROWS
+	tableHeight := layout.ViewportHeight - totalOverhead
+
+	// Ensure minimum
+	if tableHeight < MinTableHeight {
+		tableHeight = MinTableHeight
+	}
+
+	return tableHeight
 }
 
 // =============================================================================
@@ -151,7 +200,7 @@ func (m TabbedTableModel) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Global keys (work on all pages)
 	switch key {
-	case "q", "esc":
+	case "esc":
 		m.result.Cancelled = true
 		m.quitting = true
 		return m, tea.Quit
@@ -237,10 +286,11 @@ func (m *TabbedTableModel) switchPage(newPage int) {
 }
 
 func (m *TabbedTableModel) updateAllTableSizes() {
+	tableHeight := calculateTableHeight(m.config, m.layout)
 	for i, page := range m.config.Pages {
 		columns := CalculateColumns(page.Columns, m.layout.TableWidth)
 		m.tables[i].SetColumns(columns)
-		m.tables[i].SetHeight(m.layout.TabbedTableHeight())
+		m.tables[i].SetHeight(tableHeight)
 	}
 } // =============================================================================
 // View Rendering
@@ -300,7 +350,7 @@ func (m TabbedTableModel) renderTabIndicator() string {
 
 	// Add navigation hint
 	if len(m.config.Pages) > 1 {
-		indicator += "  " + RenderDim("(Tab/←/→)")
+		indicator += "  " + RenderHint("(Tab/←/→)")
 	}
 
 	return indicator
