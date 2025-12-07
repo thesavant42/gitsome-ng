@@ -24,8 +24,7 @@ type ProjectSelectorModel struct {
 	createInput string // input for new project name
 	result      *ProjectResult
 	quitting    bool
-	width       int
-	height      int
+	layout      Layout
 }
 
 // NewProjectSelectorModel creates a new project selector
@@ -33,20 +32,18 @@ func NewProjectSelectorModel(projects []string) ProjectSelectorModel {
 	return ProjectSelectorModel{
 		projects: projects,
 		cursor:   0,
-		width:    DefaultWidth,
-		height:   30,
+		layout:   DefaultLayout(),
 	}
 }
 
 func (m ProjectSelectorModel) Init() tea.Cmd {
-	return tea.WindowSize()
+	return StandardInit()
 }
 
 func (m ProjectSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
+		m.layout = NewLayout(msg.Width, msg.Height)
 		return m, nil
 
 	case tea.KeyMsg:
@@ -142,129 +139,51 @@ func (m ProjectSelectorModel) View() string {
 		return ""
 	}
 
-	// Calculate layout dimensions
-	layout := NewLayout(m.width, m.height)
-
 	var b strings.Builder
 
-	b.WriteString(TitleStyle.Render("Select Project"))
-	b.WriteString("\n")
-	b.WriteString(strings.Repeat("─", layout.InnerWidth))
-	b.WriteString("\n\n")
+	// Use ViewHeader helper for consistent title + divider
+	b.WriteString(ViewHeader("Select Project", m.layout.InnerWidth))
 
 	if m.createMode {
 		b.WriteString("Enter project name:\n\n")
 		b.WriteString(AccentStyle.Render(m.createInput + "_"))
 		b.WriteString("\n\n")
 		b.WriteString(HintStyle.Render("Press Enter to create, Esc to cancel"))
+
+		// Create mode: single box layout
+		mainContent := b.String()
+		availableHeight := m.layout.MainContentHeight()
+		paddedContent := PadToHeight(mainContent, availableHeight)
+
+		return BorderStyle.
+			Width(m.layout.InnerWidth).
+			Height(availableHeight).
+			Render(paddedContent)
+	}
+
+	// Select mode: render project list
+	if len(m.projects) == 0 {
+		b.WriteString(HintStyle.Render("No existing projects found"))
+		b.WriteString("\n\n")
 	} else {
-		// List existing projects
-		if len(m.projects) == 0 {
-			b.WriteString(HintStyle.Render("No existing projects found"))
-			b.WriteString("\n\n")
-		} else {
-			for i, proj := range m.projects {
-				// Display project name without .db extension
-				displayName := strings.TrimSuffix(proj, filepath.Ext(proj))
-				if i == m.cursor {
-					b.WriteString(SelectedStyle.Width(layout.InnerWidth).Render("• " + displayName))
-				} else {
-					b.WriteString(NormalStyle.Width(layout.InnerWidth).Render("• " + displayName))
-				}
-				b.WriteString("\n")
-			}
+		for i, proj := range m.projects {
+			displayName := strings.TrimSuffix(proj, filepath.Ext(proj))
+			b.WriteString(RenderListItem(displayName, i == m.cursor, m.layout.InnerWidth))
 			b.WriteString("\n")
 		}
-
-		// Create New option
-		if m.cursor == len(m.projects) {
-			b.WriteString(SelectedStyle.Width(layout.InnerWidth).Render("• Create New Project"))
-		} else {
-			b.WriteString(NormalStyle.Width(layout.InnerWidth).Render("• Create New Project"))
-		}
-		b.WriteString("\n")
-
-		// Exit option
-		if m.cursor == len(m.projects)+1 {
-			b.WriteString(SelectedStyle.Width(layout.InnerWidth).Render("• Exit"))
-		} else {
-			b.WriteString(NormalStyle.Width(layout.InnerWidth).Render("• Exit"))
-		}
 		b.WriteString("\n")
 	}
 
-	// Get the main content
-	mainContent := b.String()
+	// Create New option
+	b.WriteString(RenderListItem("Create New Project", m.cursor == len(m.projects), m.layout.InnerWidth))
+	b.WriteString("\n")
 
-	// Build final view with two-box layout (only in select mode)
-	var result strings.Builder
+	// Exit option
+	b.WriteString(RenderListItem("Exit", m.cursor == len(m.projects)+1, m.layout.InnerWidth))
+	b.WriteString("\n")
 
-	if m.createMode {
-		// Create mode: single box with current layout
-		contentLines := strings.Count(mainContent, "\n")
-		availableHeight := m.height - 7 // -3 header, -2 RenderBorder overhead, -2 footer
-		if contentLines < availableHeight {
-			mainContent += strings.Repeat("\n", availableHeight-contentLines)
-		}
-
-		// Apply border with full width and height
-		borderedContent := BorderStyle.
-			Width(layout.InnerWidth).
-			Height(availableHeight).
-			Render(mainContent)
-
-		result.WriteString(borderedContent)
-	} else {
-		// Select mode: two-box layout
-		// First box: main content (projects list)
-		// Calculate available height: viewport - footer box (3 lines: 1 content + 2 border) - spacing (1 line) - main border overhead (2 lines)
-		mainAvailableHeight := m.height - 6
-		if mainAvailableHeight < 10 {
-			mainAvailableHeight = 10
-		}
-
-		mainContentLines := strings.Count(mainContent, "\n")
-		if mainContentLines < mainAvailableHeight {
-			mainContent += strings.Repeat("\n", mainAvailableHeight-mainContentLines)
-		}
-
-		// Apply border to main content
-		mainBordered := BorderStyle.
-			Width(layout.InnerWidth).
-			Height(mainAvailableHeight).
-			Render(mainContent)
-
-		result.WriteString(mainBordered)
-		result.WriteString("\n") // Spacing between boxes
-
-		// Second box: help text (1 row high) - use white border like menu screen
-		helpText := "up/down: navigate | Enter: select | q: quit"
-		helpContent := HintStyle.Render(helpText)
-
-		// Create help box with centered text
-		textWidth := len(helpText)
-		padding := (layout.InnerWidth - textWidth) / 2
-		var helpBoxContent strings.Builder
-		if padding > 0 {
-			helpBoxContent.WriteString(strings.Repeat(" ", padding))
-		}
-		helpBoxContent.WriteString(helpContent)
-		// Fill remaining space
-		remaining := layout.InnerWidth - padding - textWidth
-		if remaining > 0 {
-			helpBoxContent.WriteString(strings.Repeat(" ", remaining))
-		}
-
-		// Apply white border to help content (1 row high) - same as menu screen
-		helpBordered := NewBorderStyleWithColor(colorWhite).
-			Width(layout.InnerWidth).
-			Height(1).
-			Render(helpBoxContent.String())
-
-		result.WriteString(helpBordered)
-	}
-
-	return result.String()
+	// Use TwoBoxView helper for standard two-box layout
+	return TwoBoxView(b.String(), "up/down: navigate | Enter: select | q: quit", m.layout)
 }
 
 // Result returns the user's selection after the program exits

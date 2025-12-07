@@ -3492,56 +3492,6 @@ func (m TUIModel) renderQueryProgress() string {
 	return borderStyle.Render(b.String())
 }
 
-// renderBubblesTableWithFullWidth renders a Bubbles table with full-width divider and selection
-// This is needed because Bubbles table header border only spans column widths, not full width
-// Selection styling is applied manually to ensure full-width selector bar
-func (m TUIModel) renderBubblesTableWithFullWidth(t table.Model) string {
-	tableOutput := t.View()
-	lines := strings.Split(tableOutput, "\n")
-	var result []string
-
-	cursor := t.Cursor()
-
-	// Calculate visible cursor index based on table scrolling
-	// Table configured height includes header, so data rows = height - 1
-	height := t.Height() - 1 // number of visible data rows
-	totalRows := len(t.Rows())
-	start := 0
-	if cursor >= height {
-		start = cursor - height + 1
-	}
-	if start > totalRows-height {
-		start = totalRows - height
-	}
-	if start < 0 {
-		start = 0
-	}
-	visibleCursorIndex := cursor - start
-
-	// Header row
-	result = append(result, NormalStyle.Width(m.layout.InnerWidth).Render(lines[0]))
-
-	// Divider line
-	result = append(result, strings.Repeat("─", m.layout.InnerWidth))
-
-	// Data rows - lines[1] onwards (skipping the built-in divider at lines[1])
-	for i := 1; i < len(lines); i++ {
-		dataRowIndex := i - 1
-
-		// Apply selection styling to cursor row
-		if dataRowIndex == visibleCursorIndex {
-			cleanLine := stripANSI(lines[i])
-			result = append(result, SelectedStyle.Width(m.layout.InnerWidth).Render(cleanLine))
-			continue
-		}
-
-		// Non-selected rows - apply normal text color with full width
-		result = append(result, NormalStyle.Width(m.layout.InnerWidth).Render(lines[i]))
-	}
-
-	return strings.Join(result, "\n")
-}
-
 // renderUserDetail renders the user detail view with repos and gists
 func (m TUIModel) renderUserDetail() string {
 	var b strings.Builder
@@ -3608,24 +3558,24 @@ func (m TUIModel) renderUserDetail() string {
 			b.WriteString("\n")
 		}
 	case 1:
-		// Repos tab - use Bubbles table with full-width selection and divider
+		// Repos tab - use centralized helper for full-width selection
 		if len(m.userRepos) == 0 {
-			// Add divider for consistency with table view (matches renderBubblesTableWithFullWidth pattern)
+			// Add divider for consistency with table view
 			b.WriteString(strings.Repeat("─", m.layout.InnerWidth))
 			b.WriteString("\n")
 			b.WriteString(HintStyle.Render("No repositories found."))
 		} else {
-			b.WriteString(m.renderBubblesTableWithFullWidth(m.userReposTable))
+			b.WriteString(RenderTableWithSelection(m.userReposTable, m.layout))
 		}
 	case 2:
-		// Gists tab - use Bubbles table with full-width selection and divider
+		// Gists tab - use centralized helper for full-width selection
 		if len(m.userGistFiles) == 0 {
-			// Add divider for consistency with table view (matches renderBubblesTableWithFullWidth pattern)
+			// Add divider for consistency with table view
 			b.WriteString(strings.Repeat("─", m.layout.InnerWidth))
 			b.WriteString("\n")
 			b.WriteString(HintStyle.Render("No gist files found."))
 		} else {
-			b.WriteString(m.renderBubblesTableWithFullWidth(m.userGistsTable))
+			b.WriteString(RenderTableWithSelection(m.userGistsTable, m.layout))
 		}
 	}
 

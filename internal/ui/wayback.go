@@ -1165,58 +1165,10 @@ func (m WaybackModel) renderTableView() string {
 	b.WriteString(AccentStyle.Render(queryInfo))
 	b.WriteString("\n")
 
-	// Table
-	b.WriteString(renderWaybackTable(m.table, m.layout))
+	// Table - use centralized helper for full-width selection
+	b.WriteString(RenderTableWithSelection(m.table, m.layout))
 
 	return b.String()
-}
-
-// renderWaybackTable renders the wayback table with full-width selection highlight
-func renderWaybackTable(t table.Model, layout Layout) string {
-	tableOutput := t.View()
-	lines := strings.Split(tableOutput, "\n")
-	var result []string
-
-	cursor := t.Cursor()
-
-	// Calculate visible cursor index based on table scrolling
-	// Table configured height includes header, so data rows = height - 1
-	height := t.Height() - 1 // number of visible data rows
-	totalRows := len(t.Rows())
-	start := 0
-	if cursor >= height {
-		start = cursor - height + 1
-	}
-	if start > totalRows-height {
-		start = totalRows - height
-	}
-	if start < 0 {
-		start = 0
-	}
-	visibleCursorIndex := cursor - start
-
-	// Header row
-	result = append(result, NormalStyle.Width(layout.InnerWidth).Render(lines[0]))
-
-	// Divider line
-	result = append(result, strings.Repeat("─", layout.InnerWidth))
-
-	// Data rows
-	for i := 1; i < len(lines); i++ {
-		dataRowIndex := i - 1
-
-		// Apply selection styling to cursor row
-		if dataRowIndex == visibleCursorIndex {
-			cleanLine := stripANSI(lines[i])
-			result = append(result, SelectedStyle.Width(layout.InnerWidth).Render(cleanLine))
-			continue
-		}
-
-		// Non-selected rows - preserve column structure from bubbles table
-		result = append(result, NormalStyle.Width(layout.InnerWidth).Render(lines[i]))
-	}
-
-	return strings.Join(result, "\n")
 }
 
 func (m WaybackModel) renderFilterView() string {
@@ -1315,30 +1267,6 @@ func (m WaybackModel) renderSettingsView() string {
 	b.WriteString(HintStyle.Render(" ←/→: ±100ms | ↑/↓: ±50ms | e: type value | Esc: back"))
 
 	return b.String()
-}
-
-func (m WaybackModel) getHelpText() string {
-	switch m.viewMode {
-	case waybackViewInput:
-		return HintStyle.Render("Enter: fetch | Tab: browse cached | ^S: settings | Esc: back")
-	case waybackViewFetching:
-		return HintStyle.Render("Esc: cancel fetch")
-	case waybackViewTable:
-		return HintStyle.Render("Enter: open | a: archive | v: details | /: filter | m: MIME | #: tag filter | t: tag | c: clear | d: del | X: mass del | e: export | Esc: back")
-	case waybackViewFilter:
-		return HintStyle.Render("Enter: apply filter | Esc: cancel")
-	case waybackViewDomains:
-		return HintStyle.Render("Enter: select | up/down: navigate | Esc: back")
-	case waybackViewDetail:
-		return HintStyle.Render("Enter: open live | a: archive | j/k: scroll | Esc: close")
-	case waybackViewSettings:
-		if m.settingsEditing {
-			return HintStyle.Render("Enter: save | Esc: cancel")
-		}
-		return HintStyle.Render("←/→: adjust ±10 | ↑/↓: adjust ±1 | e: edit | Esc: back")
-	default:
-		return ""
-	}
 }
 
 // getHelpTextPlain returns the help text without styling (for two-box layout)

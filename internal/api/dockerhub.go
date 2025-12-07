@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/log"
@@ -12,9 +13,40 @@ import (
 
 const (
 	dockerHubSearchURL       = "https://hub.docker.com/api/search/v3/catalog/search"
+	dockerHubTagsURL         = "https://hub.docker.com/v2/repositories"
 	dockerHubPageSize        = 25
 	dockerHubSearchUserAgent = "Docker-Client/24.0.0 (linux)"
 )
+
+// DockerHubTagImage represents architecture-specific image info for a tag
+type DockerHubTagImage struct {
+	Architecture string `json:"architecture"`
+	OS           string `json:"os"`
+	OSVersion    string `json:"os_version,omitempty"`
+	Variant      string `json:"variant,omitempty"`
+	Digest       string `json:"digest"`
+	Size         int64  `json:"size"`
+	Status       string `json:"status"`
+	LastPulled   string `json:"last_pulled,omitempty"`
+	LastPushed   string `json:"last_pushed,omitempty"`
+}
+
+// DockerHubTag represents a tag with all its architecture variants
+type DockerHubTag struct {
+	Name        string              `json:"name"`
+	FullSize    int64               `json:"full_size"`
+	LastUpdated string              `json:"last_updated"`
+	Images      []DockerHubTagImage `json:"images"`
+	TagStatus   string              `json:"tag_status"`
+}
+
+// DockerHubTagsResponse represents the response from the tags API
+type DockerHubTagsResponse struct {
+	Count    int            `json:"count"`
+	Next     string         `json:"next"`
+	Previous string         `json:"previous"`
+	Results  []DockerHubTag `json:"results"`
+}
 
 // DockerHubClient handles Docker Hub API requests
 type DockerHubClient struct {
@@ -181,3 +213,80 @@ func (c *DockerHubClient) parseSearchResponse(raw map[string]interface{}, query 
 	return response, nil
 }
 
+// ListTagsDetailed fetches detailed tag information from Docker Hub API
+// This includes architecture variants, OS info, sizes, and digests for each tag
+// imageName should be in format "user/repo" or just "repo" for official images
+func (c *DockerHubClient) ListTagsDetailed(imageName string, page int) (*DockerHubTagsResponse, error) {
+	if page < 1 {
+		page = 1
+	}
+
+	// Normalize image name - official images need "library/" prefix
+	repoPath := imageName
+	if !strings.Contains(imageName, "/") {
+		repoPath = "library/" + imageName
+	}
+
+	// Build the tags URL
+	tagsURL := fmt.Sprintf("%s/%s/tags?page_size=%d&page=%d&ordering=last_updated",
+		dockerHubTagsURL, repoPath, dockerHubPageSize, page)
+
+	req, err := http.NewRequest("GET", tagsURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("User-Agent", dockerHubSearchUserAgent)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("repository not found: %s", imageName)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	var tagsResp DockerHubTagsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tagsResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &tagsResp, nil
+}
+
+// ListAllTagsDetailed fetches all tags (paginated) from Docker Hub API
+// Returns up to maxTags tags, sorted by most recently updated first
+func (c *DockerHubClient) ListAllTagsDetailed(imageName string, maxTags int) ([]DockerHubTag, error) {
+	var allTags []DockerHubTag
+	page := 1
+
+	for len(allTags) < maxTags {
+		resp, err := c.ListTagsDetailed(imageName, page)
+		if err != nil {
+			if page == 1 {
+				return nil, err // Return error only if first page fails
+			}
+			break // Stop pagination on error for subsequent pages
+		}
+
+		allTags = append(allTags, resp.Results...)
+
+		if resp.Next == "" || len(resp.Results) == 0 {
+			break // No more pages
+		}
+		page++
+	}
+
+	// Trim to maxTags if we got more
+	if len(allTags) > maxTags {
+		allTags = allTags[:maxTags]
+	}
+
+	return allTags, nil
+}

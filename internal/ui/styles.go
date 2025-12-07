@@ -429,6 +429,39 @@ func DefaultLayout() Layout {
 }
 
 // =============================================================================
+// Layout Height Constants - SINGLE SOURCE OF TRUTH
+// All View() functions MUST use these via Layout methods.
+// =============================================================================
+
+const (
+	// MainBoxBorderOverhead is the vertical space taken by main box borders.
+	MainBoxBorderOverhead = 2
+
+	// FooterBoxTotalHeight includes border (2) and content (1).
+	FooterBoxTotalHeight = 3
+
+	// BoxSpacing is vertical space between main and footer boxes.
+	BoxSpacing = 1
+
+	// TwoBoxOverhead is total overhead for two-box layout.
+	// MainBoxBorderOverhead + FooterBoxTotalHeight + BoxSpacing = 6
+	TwoBoxOverhead = MainBoxBorderOverhead + FooterBoxTotalHeight + BoxSpacing
+
+	// MinMainContentHeight is the minimum height for main content area.
+	MinMainContentHeight = 10
+)
+
+// MainContentHeight returns available height for main box content.
+// USE THIS instead of hardcoding ViewportHeight - 6.
+func (l Layout) MainContentHeight() int {
+	h := l.ViewportHeight - TwoBoxOverhead
+	if h < MinMainContentHeight {
+		return MinMainContentHeight
+	}
+	return h
+}
+
+// =============================================================================
 // Column Widths (unchanged)
 // =============================================================================
 
@@ -804,6 +837,63 @@ func (b borderStyleRenderer) Render(content string) string {
 		prefix = strings.Repeat("\n", b.marginTop)
 	}
 	return prefix + RenderBorder(content, w, h)
+}
+
+// =============================================================================
+// Two-Box Layout Helpers (used by layerslayer.go selectors)
+// =============================================================================
+
+// RenderCenteredFooter renders a centered help text in a white-bordered footer box.
+// This consolidates the repeated footer rendering pattern across all selector models.
+func RenderCenteredFooter(helpText string, innerWidth int) string {
+	textWidth := len(helpText)
+	padding := (innerWidth - textWidth) / 2
+	var footerContent strings.Builder
+	if padding > 0 {
+		footerContent.WriteString(strings.Repeat(" ", padding))
+	}
+	footerContent.WriteString(RenderHint(helpText))
+	remaining := innerWidth - padding - textWidth
+	if remaining > 0 {
+		footerContent.WriteString(strings.Repeat(" ", remaining))
+	}
+	return RenderBorderWhite(footerContent.String(), innerWidth, 1)
+}
+
+// PadContentToHeight pads content with newlines to fill available height.
+// Returns the padded content string.
+func PadContentToHeight(content string, targetHeight int) string {
+	contentLines := strings.Count(content, "\n")
+	if contentLines < targetHeight {
+		return content + strings.Repeat("\n", targetHeight-contentLines)
+	}
+	return content
+}
+
+// BuildTwoBoxView constructs the standard two-box layout used by most selector models.
+// Returns the complete view string with main content box (red border) and footer box (white border).
+func BuildTwoBoxView(content, helpText string, layout Layout) string {
+	// Calculate available height for main content box
+	// Subtract: footer box (3 lines: 1 content + 2 border) + spacing (1 line) + border overhead (2 lines)
+	mainAvailableHeight := layout.ViewportHeight - 6
+	if mainAvailableHeight < 10 {
+		mainAvailableHeight = 10
+	}
+
+	// Pad content to fill available height
+	paddedContent := PadContentToHeight(content, mainAvailableHeight)
+
+	var result strings.Builder
+
+	// First box: Main content (red border)
+	mainBordered := RenderBorder(paddedContent, layout.InnerWidth, mainAvailableHeight)
+	result.WriteString(mainBordered)
+	result.WriteString("\n") // Spacing between boxes
+
+	// Second box: Help text (white border, 1 row high)
+	result.WriteString(RenderCenteredFooter(helpText, layout.InnerWidth))
+
+	return result.String()
 }
 
 // =============================================================================

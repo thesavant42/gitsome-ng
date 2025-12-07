@@ -7,64 +7,16 @@ package ui
 import (
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/paginator"
 	bubbleSpinner "github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/table"
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/huh/spinner"
 	"github.com/thesavant42/gitsome-ng/internal/api"
 	"github.com/thesavant42/gitsome-ng/internal/db"
 )
-
-// =============================================================================
-// Helper Functions
-// =============================================================================
-
-// sanitizeBuildStep normalizes whitespace in build steps to prevent layout issues.
-// Replaces tabs and multiple consecutive spaces with a single space.
-var multiSpaceRegex = regexp.MustCompile(`[\t ]+`)
-
-func sanitizeBuildStep(step string) string {
-	// Replace tabs and multiple spaces with single space
-	result := multiSpaceRegex.ReplaceAllString(step, " ")
-	// Trim leading/trailing whitespace
-	return strings.TrimSpace(result)
-}
-
-// wrapBuildStep wraps a build step to fit within width
-func wrapBuildStep(text string, width int) string {
-	if width <= 0 || len(text) <= width {
-		return text
-	}
-	var result strings.Builder
-	remaining := text
-	for len(remaining) > 0 {
-		if len(remaining) <= width {
-			result.WriteString(remaining)
-			break
-		}
-		// Find break point
-		breakPoint := width
-		for i := width; i > width/2; i-- {
-			c := remaining[i-1]
-			if c == ' ' || c == '/' || c == '-' || c == '_' {
-				breakPoint = i
-				break
-			}
-		}
-		result.WriteString(remaining[:breakPoint])
-		result.WriteString("\n")
-		remaining = remaining[breakPoint:]
-	}
-	return result.String()
-}
 
 // =============================================================================
 // Filesystem Tree Structure
@@ -137,53 +89,6 @@ func (n *fsNode) getSortedChildren() []*fsNode {
 		return children[i].name < children[j].name
 	})
 	return children
-}
-
-// =============================================================================
-// Shared Table Rendering Helper
-// =============================================================================
-
-// renderTableWithFullWidthSelection renders a bubbles table with full-width selection highlight.
-// The table's Selected style should use Background(lipgloss.NoColor{}) to prevent ANSI embedding,
-// and this function applies the visible selection styling.
-// This matches the pattern used in tui.go's renderBubblesTableWithFullWidth().
-func renderTableWithFullWidthSelection(t table.Model, layout Layout) string {
-	tableOutput := t.View()
-	lines := strings.Split(tableOutput, "\n")
-	var result []string
-
-	cursor := t.Cursor()
-
-	for i, line := range lines {
-		// Header row - apply full width for consistent rendering
-		if i == 0 {
-			result = append(result, NormalStyle.Width(layout.InnerWidth).Render(line))
-			continue
-		}
-
-		// Divider line (line 1) - use InnerWidth for full width
-		if i == 1 {
-			result = append(result, strings.Repeat("─", layout.InnerWidth))
-			continue
-		}
-
-		// Data rows start at line 2, so dataRowIndex = i - 2
-		dataRowIndex := i - 2
-
-		// Apply full-width selection styling to the selected row
-		// The table component handles scrolling internally, so we just need to match
-		// the cursor position with the corresponding visible line
-		if dataRowIndex >= 0 && dataRowIndex == cursor {
-			cleanLine := stripANSI(line)
-			result = append(result, SelectedStyle.Width(layout.InnerWidth).Render(cleanLine))
-			continue
-		}
-
-		// Non-selected data rows - apply normal text color with full width
-		result = append(result, NormalStyle.Width(layout.InnerWidth).Render(line))
-	}
-
-	return strings.Join(result, "\n")
 }
 
 // =============================================================================
@@ -460,7 +365,7 @@ func (m fsBrowserModel) View() string {
 	contentBuilder.WriteString("\n\n")
 
 	// Table view with full-width selection
-	contentBuilder.WriteString(renderTableWithFullWidthSelection(m.table, m.layout))
+	contentBuilder.WriteString(RenderTableWithSelection(m.table, m.layout))
 
 	// Show status message if present
 	if m.statusMsg != "" {
@@ -497,386 +402,121 @@ func runFSBrowser(entries []api.TarEntry, layerInfo, imageRef, layerDigest strin
 }
 
 // =============================================================================
-// Layer Selector TUI (shows build steps and layers with red border)
+// NEW: Layer Selector using TabbedTableView (replaces layerSelectorModel)
 // =============================================================================
 
-// layerSelectorModel is the TUI model for selecting layers to inspect
-// Uses bubbles/table for proper scrolling with many layers
-type layerSelectorModel struct {
-	table      table.Model
-	imageRef   string
-	layers     []api.Layer
-	buildSteps []string
-	selected   string // The selection result (e.g., "ALL", "0,1,2", etc.)
-	inputMode  bool   // True when typing custom selection
-	inputText  string
-	quitting   bool
-	layout     Layout
-
-	// Pagination state - 0 = Layers, 1 = Build Steps
-	currentPage   int
-	buildViewport viewport.Model // viewport for scrollable build steps
-	viewportReady bool
-	paginator     paginator.Model // visual page indicator (dots)
-}
-
-func newLayerSelectorModel(imageRef string, layers []api.Layer, buildSteps []string) layerSelectorModel {
-	layout := DefaultLayout()
-
-	// Calculate column widths to fill InnerWidth for full-width selector highlighting
-	// Use InnerWidth directly to ensure columns fill full content area
-	totalW := layout.InnerWidth
-	if totalW < 50 {
-		totalW = 50
-	}
-
-	// Column widths: Index (8), Digest (variable), Size (12)
-	indexW := 8
-	sizeW := 12
-	digestW := totalW - indexW - sizeW
-	if digestW < 20 {
-		digestW = 20
-	}
-
-	columns := []table.Column{
-		{Title: "Index", Width: indexW},
-		{Title: "Digest", Width: digestW},
-		{Title: "Size", Width: sizeW},
-	}
-
-	// Build table rows - "ALL" first, then individual layers
-	rows := make([]table.Row, len(layers)+1)
-	rows[0] = table.Row{"ALL", "(fetch all layers)", ""}
+// runLayerSelectorTabbedTUI runs the layer selector using the new TabbedTableView.
+// This replaces both runLayerSelectorTUI (fresh fetch) and showCachedLayersForImage (cached).
+// Returns: selection string ("ALL", "0", "1,2,3", etc.) or empty if cancelled.
+func runLayerSelectorTabbedTUI(imageRef string, layers []api.Layer, buildSteps []string) (string, error) {
+	// Build layer rows: "ALL" first, then individual layers
+	layerRows := make([]table.Row, len(layers)+1)
+	layerRows[0] = table.Row{"ALL", "(fetch all layers)", ""}
 
 	for i, layer := range layers {
 		digestShort := layer.Digest
-		if len(digestShort) > digestW-2 {
-			digestShort = digestShort[:digestW-5] + "..."
+		if len(digestShort) > 20 {
+			digestShort = digestShort[:17] + "..."
 		}
-		rows[i+1] = table.Row{
+		layerRows[i+1] = table.Row{
 			fmt.Sprintf("[%d]", i),
 			digestShort,
 			api.HumanReadableSize(layer.Size),
 		}
 	}
 
-	t := table.New(
-		table.WithColumns(columns),
-		table.WithRows(rows),
-		table.WithFocused(true),
-		table.WithHeight(layout.TableHeight),
-	)
+	// Build build steps rows (with wrapping)
+	buildStepsRows := buildBuildStepsRows(buildSteps)
 
-	// Apply standard table styles for consistent look
-	ApplyTableStyles(&t)
+	// Create tabbed table config
+	builder := NewTabbedTable(fmt.Sprintf("Layer Inspector: %s", imageRef))
 
-	// Ensure cursor starts at the top (first row) for proper viewport positioning
-	t.GotoTop()
+	// Add Layers page (selectable)
+	builder.AddPage("Layers", LayerSelectorColumns(), layerRows)
 
-	// Create viewport for build steps - use full width
-	vp := viewport.New(layout.InnerWidth, layout.TableHeight)
-
-	// Build the content for the viewport - sanitize and wrap build steps
-	var buildContent strings.Builder
-	wrapWidth := layout.InnerWidth - 6 // Leave room for "[xx] " prefix
-	for i, step := range buildSteps {
-		displayStep := sanitizeBuildStep(step)
-		wrapped := wrapBuildStep(displayStep, wrapWidth)
-		lines := strings.Split(wrapped, "\n")
-		for j, line := range lines {
-			if j == 0 {
-				buildContent.WriteString(fmt.Sprintf("[%d] %s\n", i, line))
-			} else {
-				buildContent.WriteString(fmt.Sprintf("    %s\n", line))
-			}
-		}
-	}
-	vp.SetContent(buildContent.String())
-
-	// Create paginator for page indicator (dots)
-	// Only show if there are build steps (2 pages: Layers, Build Steps)
-	p := paginator.New()
-	p.Type = paginator.Dots
-	p.PerPage = 1
+	// Add Build Steps page (read-only) if we have any
 	if len(buildSteps) > 0 {
-		p.SetTotalPages(2)
+		builder.AddReadOnlyPage("Build Steps", BuildStepsColumns(), buildStepsRows)
+	}
+
+	// Set help text
+	if len(buildSteps) > 0 {
+		builder.WithHelpText("↑/↓: navigate | Tab/←/→: build steps | Enter: select | q/Esc: back")
 	} else {
-		p.SetTotalPages(1)
+		builder.WithHelpText("↑/↓: navigate | Enter: select | q/Esc: back")
 	}
 
-	return layerSelectorModel{
-		table:         t,
-		imageRef:      imageRef,
-		layers:        layers,
-		buildSteps:    buildSteps,
-		inputMode:     false,
-		layout:        layout,
-		currentPage:   0, // Start on Layers page
-		buildViewport: vp,
-		viewportReady: true,
-		paginator:     p,
-	}
-}
-
-func (m *layerSelectorModel) updateTableSize() {
-	// Recalculate column widths to fill InnerWidth for full-width selector highlighting
-	// Use InnerWidth directly to ensure columns fill full content area
-	totalW := m.layout.InnerWidth
-	if totalW < 50 {
-		totalW = 50
-	}
-
-	indexW := 8
-	sizeW := 12
-	digestW := totalW - indexW - sizeW
-	if digestW < 20 {
-		digestW = 20
-	}
-
-	columns := []table.Column{
-		{Title: "Index", Width: indexW},
-		{Title: "Digest", Width: digestW},
-		{Title: "Size", Width: sizeW},
-	}
-	m.table.SetColumns(columns)
-	m.table.SetHeight(m.layout.TableHeight)
-}
-
-func (m layerSelectorModel) Init() tea.Cmd {
-	return tea.WindowSize()
-}
-
-func (m layerSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.layout = NewLayout(msg.Width, msg.Height)
-		m.updateTableSize()
-		// Update viewport dimensions for build steps
-		m.buildViewport.Width = m.layout.InnerWidth
-		m.buildViewport.Height = m.layout.TableHeight
-		return m, nil
-
-	case tea.KeyMsg:
-		// Handle input mode (custom layer selection)
-		if m.inputMode {
-			switch msg.String() {
-			case "esc":
-				m.inputMode = false
-				m.inputText = ""
-				return m, nil
-			case "enter":
-				if m.inputText != "" {
-					m.selected = m.inputText
-					m.quitting = true
-					return m, tea.Quit
-				}
-				return m, nil
-			case "backspace":
-				if len(m.inputText) > 0 {
-					m.inputText = m.inputText[:len(m.inputText)-1]
-				}
-				return m, nil
-			default:
-				// Only accept digits and commas
-				if len(msg.String()) == 1 {
-					ch := msg.String()[0]
-					if (ch >= '0' && ch <= '9') || ch == ',' {
-						m.inputText += msg.String()
-					}
-				}
-				return m, nil
-			}
-		}
-
-		// Handle page switching with left/right arrows
-		switch msg.String() {
-		case "left", "h":
-			if m.currentPage > 0 {
-				m.currentPage--
-				m.paginator.PrevPage()
-				m.buildViewport.GotoTop() // Reset viewport when switching pages
-			}
-			return m, nil
-		case "right", "l":
-			// Only allow switching to build steps page if there are build steps
-			if len(m.buildSteps) > 0 && m.currentPage < 1 {
-				m.currentPage++
-				m.paginator.NextPage()
-			}
-			return m, nil
-		case "tab":
-			// Toggle between pages
-			if len(m.buildSteps) > 0 {
-				m.currentPage = (m.currentPage + 1) % 2
-				m.paginator.Page = m.currentPage
-				m.buildViewport.GotoTop()
-			}
-			return m, nil
-		}
-
-		// Handle page-specific keys
-		if m.currentPage == 1 {
-			// Build Steps page - delegate to viewport for scrolling
-			switch msg.String() {
-			case "q", "esc":
-				m.quitting = true
-				return m, tea.Quit
-			}
-			// Let viewport handle all other keys (up/down/pgup/pgdn/home/end)
-			var cmd tea.Cmd
-			m.buildViewport, cmd = m.buildViewport.Update(msg)
-			return m, cmd
-		}
-
-		// Layers page - handle layer selection
-		switch msg.String() {
-		case "q", "esc":
-			m.quitting = true
-			return m, tea.Quit
-		case "enter":
-			cursor := m.table.Cursor()
-			if cursor == 0 {
-				// "ALL" option
-				m.selected = "ALL"
-			} else {
-				// Single layer selection (cursor-1 because row 0 is "ALL")
-				m.selected = fmt.Sprintf("%d", cursor-1)
-			}
-			m.quitting = true
-			return m, tea.Quit
-		case "c":
-			// Custom selection mode
-			m.inputMode = true
-			m.inputText = ""
-			return m, nil
-		}
-	}
-
-	// Let the table handle navigation (up/down/pgup/pgdown/home/end) on Layers page
-	if m.currentPage == 0 {
-		var cmd tea.Cmd
-		m.table, cmd = m.table.Update(msg)
-		return m, cmd
-	}
-
-	return m, nil
-}
-
-func (m layerSelectorModel) View() string {
-	if m.quitting {
-		return ""
-	}
-
-	var contentBuilder strings.Builder
-
-	// Title
-	contentBuilder.WriteString(TitleStyle.Render(fmt.Sprintf("Layer Inspector: %s", m.imageRef)))
-	contentBuilder.WriteString("\n")
-
-	// Page indicator using bubbles paginator (dots)
-	if len(m.buildSteps) > 0 {
-		// Show page labels with paginator dots
-		pageLabel := "Layers"
-		if m.currentPage == 1 {
-			pageLabel = "Build Steps"
-		}
-		paginatorLine := fmt.Sprintf("  %s  %s  (←/→ to switch)", pageLabel, m.paginator.View())
-		contentBuilder.WriteString(HintStyle.Render(paginatorLine))
-	}
-	contentBuilder.WriteString("\n")
-	contentBuilder.WriteString(strings.Repeat("─", m.layout.InnerWidth))
-	contentBuilder.WriteString("\n\n")
-
-	if m.currentPage == 0 {
-		// === LAYERS PAGE ===
-		contentBuilder.WriteString(NormalStyle.Bold(true).Render("Layers:"))
-		contentBuilder.WriteString(fmt.Sprintf(" (%d available)\n\n", len(m.layers)))
-
-		// Input mode display OR table
-		if m.inputMode {
-			contentBuilder.WriteString(NormalStyle.Render("Enter layer indices (comma-separated): "))
-			contentBuilder.WriteString(m.inputText)
-			contentBuilder.WriteString("_")
-			contentBuilder.WriteString("\n")
-		} else {
-			// Table view with full-width selection
-			contentBuilder.WriteString(renderTableWithFullWidthSelection(m.table, m.layout))
-		}
-	} else {
-		// === BUILD STEPS PAGE ===
-		contentBuilder.WriteString(NormalStyle.Bold(true).Render("Build Steps:"))
-		contentBuilder.WriteString(fmt.Sprintf(" (%d steps)\n\n", len(m.buildSteps)))
-
-		// Render build steps with full-width styling (similar to table)
-		// Get the viewport content lines and apply full-width styling
-		vpContent := m.buildViewport.View()
-		vpLines := strings.Split(vpContent, "\n")
-
-		for _, line := range vpLines {
-			// Pad each line to full width for consistent appearance
-			// Use StringWidth for proper visible character count
-			lineLen := StringWidth(line)
-			displayLine := line
-			if lineLen < m.layout.InnerWidth {
-				displayLine += strings.Repeat(" ", m.layout.InnerWidth-lineLen)
-			}
-			contentBuilder.WriteString(NormalStyle.Render(displayLine))
-			contentBuilder.WriteString("\n")
-		}
-
-		// Show scroll position indicator
-		scrollPercent := m.buildViewport.ScrollPercent() * 100
-		scrollInfo := fmt.Sprintf("%.0f%% (↑/↓ scroll, PgUp/PgDn page)", scrollPercent)
-		contentBuilder.WriteString(HintStyle.Render(scrollInfo))
-	}
-
-	// Calculate available height for border
-	// Account for: 1 top margin + 2 border lines + 1 line after border + 1 hint line = 5 lines overhead
-	availableHeight := m.layout.ViewportHeight - 5
-	if availableHeight < 10 {
-		availableHeight = 10
-	}
-
-	// Border around content using InnerWidth (content width = InnerWidth, total = ViewportWidth)
-	borderedContent := BorderStyle.
-		Width(m.layout.InnerWidth).
-		Height(availableHeight).
-		Render(contentBuilder.String())
-
-	var result strings.Builder
-	result.WriteString("\n") // Top margin
-	result.WriteString(borderedContent)
-	result.WriteString("\n")
-
-	// Help text based on current page and mode
-	var helpText string
-	if m.inputMode {
-		helpText = "Enter: confirm | Esc: cancel"
-	} else if m.currentPage == 0 {
-		if len(m.buildSteps) > 0 {
-			helpText = "↑/↓: navigate | Enter: select | c: custom | ←/→: switch tab | q/Esc: back"
-		} else {
-			helpText = "↑/↓: navigate | Enter: select | c: custom | q/Esc: back"
-		}
-	} else {
-		helpText = "↑/↓: scroll | PgUp/PgDn: page | ←/→: switch tab | q/Esc: back"
-	}
-	result.WriteString(" " + HintStyle.Render(helpText))
-
-	return result.String()
-}
-
-// runLayerSelectorTUI runs the layer selector TUI and returns the selection
-func runLayerSelectorTUI(imageRef string, layers []api.Layer, buildSteps []string) (string, error) {
-	m := newLayerSelectorModel(imageRef, layers, buildSteps)
-	p := tea.NewProgram(m, tea.WithAltScreen())
-	finalModel, err := p.Run()
+	// Run the tabbed table
+	result, err := builder.Run()
 	if err != nil {
-		return "", fmt.Errorf("layer selector error: %w", err)
+		return "", err
 	}
 
-	result := finalModel.(layerSelectorModel)
-	return result.selected, nil
+	if result.Cancelled {
+		return "", nil
+	}
+
+	// Convert selection to string format expected by caller
+	if result.SelectedRow == 0 {
+		return "ALL", nil
+	}
+	return fmt.Sprintf("%d", result.SelectedRow-1), nil
+}
+
+// wrapBuildStep wraps text to fit within a given width, returning multiple lines
+func wrapBuildStep(text string, width int) []string {
+	if width <= 0 || len(text) <= width {
+		return []string{text}
+	}
+
+	var lines []string
+	remaining := text
+
+	for len(remaining) > 0 {
+		if len(remaining) <= width {
+			lines = append(lines, remaining)
+			break
+		}
+
+		// Find a good break point
+		breakPoint := width
+		for i := width; i > width/2; i-- {
+			c := remaining[i-1]
+			if c == ' ' || c == '/' || c == '-' || c == '=' || c == '&' {
+				breakPoint = i
+				break
+			}
+		}
+
+		lines = append(lines, remaining[:breakPoint])
+		remaining = remaining[breakPoint:]
+	}
+
+	return lines
+}
+
+// buildBuildStepsRows creates table rows from build steps with proper wrapping.
+func buildBuildStepsRows(buildSteps []string) []table.Row {
+	if len(buildSteps) == 0 {
+		return []table.Row{{"No build steps available"}}
+	}
+
+	// Estimate wrap width (will be recalculated on resize, but need initial value)
+	wrapWidth := 100 // Conservative default
+
+	var rows []table.Row
+	for i, step := range buildSteps {
+		step = strings.TrimSpace(step)
+		wrapped := wrapBuildStep(step, wrapWidth)
+		for j, line := range wrapped {
+			if j == 0 {
+				rows = append(rows, table.Row{fmt.Sprintf("[%2d] %s", i, line)})
+			} else {
+				rows = append(rows, table.Row{fmt.Sprintf("     %s", line)})
+			}
+		}
+	}
+	return rows
 }
 
 // RunLayerInspector runs the interactive layer inspector for a Docker image (no DB)
@@ -897,12 +537,9 @@ func runLayerInspectorInternal(imageRef string, database *db.DB) error {
 	var manifest *api.Manifest
 	var fetchErr error
 
-	err := spinner.New().
-		Title("Fetching manifest for " + imageRef + "...").
-		Action(func() {
-			manifest, fetchErr = client.GetManifest(imageRef, "")
-		}).
-		Run()
+	err := RunWithSpinner("Fetching manifest for "+imageRef+"...", func() {
+		manifest, fetchErr = client.GetManifest(imageRef, "")
+	})
 
 	if err != nil {
 		return fmt.Errorf("spinner error: %w", err)
@@ -923,12 +560,9 @@ func runLayerInspectorInternal(imageRef string, database *db.DB) error {
 
 		// Re-fetch platform-specific manifest
 		selectedPlatform := manifest.Platforms[platformIdx]
-		err = spinner.New().
-			Title(fmt.Sprintf("Fetching %s/%s manifest...", selectedPlatform.OS, selectedPlatform.Architecture)).
-			Action(func() {
-				manifest, fetchErr = client.GetManifest(imageRef, selectedPlatform.Digest)
-			}).
-			Run()
+		err = RunWithSpinner(fmt.Sprintf("Fetching %s/%s manifest...", selectedPlatform.OS, selectedPlatform.Architecture), func() {
+			manifest, fetchErr = client.GetManifest(imageRef, selectedPlatform.Digest)
+		})
 
 		if err != nil {
 			return fmt.Errorf("spinner error: %w", err)
@@ -946,12 +580,9 @@ func runLayerInspectorInternal(imageRef string, database *db.DB) error {
 		configDigest = manifest.Config.Digest
 		// v2 manifest - fetch config blob for build steps
 		var stepsErr error
-		err := spinner.New().
-			Title("Fetching build steps...").
-			Action(func() {
-				steps, stepsErr = client.FetchBuildSteps(imageRef, manifest.Config.Digest)
-			}).
-			Run()
+		err := RunWithSpinner("Fetching build steps...", func() {
+			steps, stepsErr = client.FetchBuildSteps(imageRef, manifest.Config.Digest)
+		})
 
 		if err != nil {
 			return fmt.Errorf("spinner error: %w", err)
@@ -984,8 +615,8 @@ func runLayerInspectorInternal(imageRef string, database *db.DB) error {
 		return nil
 	}
 
-	// 6. Run the layer selector TUI with proper styling
-	selectionInput, err := runLayerSelectorTUI(imageRef, manifest.Layers, steps)
+	// 6. Run the layer selector TUI with proper styling (using new TabbedTableView)
+	selectionInput, err := runLayerSelectorTabbedTUI(imageRef, manifest.Layers, steps)
 	if err != nil {
 		return err
 	}
@@ -1086,12 +717,9 @@ func runLayerInspectorInternal(imageRef string, database *db.DB) error {
 		if entries == nil {
 			var peekErr error
 
-			err := spinner.New().
-				Title(fmt.Sprintf("Fetching layer %d from registry...", idx)).
-				Action(func() {
-					entries, peekErr = client.PeekLayerBlob(imageRef, layer.Digest)
-				}).
-				Run()
+			err := RunWithSpinner(fmt.Sprintf("Fetching layer %d from registry...", idx), func() {
+				entries, peekErr = client.PeekLayerBlob(imageRef, layer.Digest)
+			})
 
 			if err != nil {
 				return fmt.Errorf("spinner error: %w", err)
@@ -1141,12 +769,9 @@ func runLayerInspectorInternal(imageRef string, database *db.DB) error {
 			if database != nil {
 				// Force re-fetch by fetching fresh
 				var peekErr error
-				err := spinner.New().
-					Title(fmt.Sprintf("Re-fetching layer %d from registry...", idx)).
-					Action(func() {
-						entries, peekErr = client.PeekLayerBlob(imageRef, layer.Digest)
-					}).
-					Run()
+				err := RunWithSpinner(fmt.Sprintf("Re-fetching layer %d from registry...", idx), func() {
+					entries, peekErr = client.PeekLayerBlob(imageRef, layer.Digest)
+				})
 
 				if err != nil {
 					fmt.Printf("Spinner error: %v\n", err)
@@ -1169,281 +794,57 @@ func runLayerInspectorInternal(imageRef string, database *db.DB) error {
 // =============================================================================
 
 // imageRefInputModel is the TUI model for entering an image reference
-type imageRefInputModel struct {
-	textInput textinput.Model
-	done      bool
-	cancelled bool
-	layout    Layout
-}
-
-func newImageRefInputModel() imageRefInputModel {
-	ti := textinput.New()
-	ti.Placeholder = "moby/buildkit:latest"
-	ti.Focus()
-	ti.CharLimit = 200
-	// ti.Width is set dynamically in Update() on tea.WindowSizeMsg
-
-	layout := DefaultLayout()
-	// Set initial width based on default layout
-	ti.Width = layout.InnerWidth - 10
-
-	return imageRefInputModel{
-		textInput: ti,
-		layout:    layout,
-	}
-}
-
-func (m imageRefInputModel) Init() tea.Cmd {
-	return tea.Batch(tea.WindowSize(), textinput.Blink)
-}
-
-func (m imageRefInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
-
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.layout = NewLayout(msg.Width, msg.Height)
-		m.textInput.Width = m.layout.InnerWidth - 10
-		return m, nil
-
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "ctrl+c", "esc":
-			m.cancelled = true
-			return m, tea.Quit
-		case "enter":
-			m.done = true
-			return m, tea.Quit
-		}
-	}
-
-	m.textInput, cmd = m.textInput.Update(msg)
-	return m, cmd
-}
-
-func (m imageRefInputModel) View() string {
-	var contentBuilder strings.Builder
-
-	// Title
-	contentBuilder.WriteString(TitleStyle.Render("Enter Image Reference"))
-	contentBuilder.WriteString("\n")
-	contentBuilder.WriteString(DimStyle.Render("Format: user/repo:tag (e.g., moby/buildkit:latest)"))
-	contentBuilder.WriteString("\n\n")
-
-	// Text input
-	contentBuilder.WriteString(m.textInput.View())
-
-	// Calculate available height for border
-	// Account for: 1 top margin + 2 border lines + 1 line after border + 1 hint line = 5 lines overhead
-	availableHeight := m.layout.ViewportHeight - 5
-	if availableHeight < 10 {
-		availableHeight = 10
-	}
-
-	// Border around content
-	borderedContent := BorderStyle.
-		Width(m.layout.InnerWidth).
-		Height(availableHeight).
-		Render(contentBuilder.String())
-
-	var result strings.Builder
-	result.WriteString("\n") // Top margin
-	result.WriteString(borderedContent)
-	result.WriteString("\n")
-	result.WriteString(" " + HintStyle.Render("Enter: confirm | Esc: cancel"))
-
-	return result.String()
-}
-
-// PromptForImageRef prompts the user for an image reference
+// PromptForImageRef prompts the user for an image reference using generic InputModel
 func PromptForImageRef() (string, error) {
-	model := newImageRefInputModel()
-	p := tea.NewProgram(model, tea.WithAltScreen())
-	finalModel, err := p.Run()
+	value, cancelled, err := RunInput(InputConfig{
+		Title:       "Enter Image Reference",
+		Subtitle:    "Format: user/repo:tag (e.g., moby/buildkit:latest)",
+		Placeholder: "moby/buildkit:latest",
+		HelpText:    "Enter: confirm | Esc: cancel",
+	})
 	if err != nil {
 		return "", fmt.Errorf("input error: %w", err)
 	}
-
-	result := finalModel.(imageRefInputModel)
-	if result.cancelled {
+	if cancelled {
 		return "", nil
 	}
-
-	imageRef := strings.TrimSpace(result.textInput.Value())
 	// Default to moby/buildkit:latest if empty
-	if imageRef == "" {
-		imageRef = "moby/buildkit:latest"
+	if value == "" {
+		value = "moby/buildkit:latest"
 	}
-
-	return imageRef, nil
+	return value, nil
 }
 
 // =============================================================================
-// Platform Selector TUI (bubbles/table, matching app style)
+// Platform Selector TUI - uses generic SelectorModel
 // =============================================================================
 
-// platformSelectorModel is the TUI model for selecting a platform using a table
-type platformSelectorModel struct {
-	table     table.Model
-	platforms []api.Platform
-	selected  int
-	quitting  bool
-	layout    Layout
-}
-
-func newPlatformSelectorModel(platforms []api.Platform) platformSelectorModel {
-	layout := DefaultLayout()
-
-	// Build table rows
-	rows := make([]table.Row, len(platforms))
+// runPlatformSelectorTUI runs the platform selector TUI and returns the selected index
+func runPlatformSelectorTUI(platforms []api.Platform) (int, error) {
+	// Build display labels from platforms
+	items := make([]string, len(platforms))
 	for i, p := range platforms {
 		label := fmt.Sprintf("%s/%s", p.OS, p.Architecture)
 		if p.Variant != "" {
 			label += "/" + p.Variant
 		}
-		rows[i] = table.Row{label}
+		items[i] = label
 	}
 
-	// Single column for platform names - use TableWidth from Layout
-	colWidth := layout.TableWidth
-	if colWidth < 20 {
-		colWidth = 20
-	}
-
-	columns := []table.Column{
-		{Title: "Platform", Width: colWidth},
-	}
-
-	t := table.New(
-		table.WithColumns(columns),
-		table.WithRows(rows),
-		table.WithFocused(true),
-		table.WithHeight(layout.TableHeight),
-	)
-
-	// Apply styles matching the app pattern
-	ApplyTableStyles(&t)
-
-	return platformSelectorModel{
-		table:     t,
-		platforms: platforms,
-		selected:  -1,
-		layout:    layout,
-	}
-}
-
-func (m platformSelectorModel) Init() tea.Cmd {
-	return tea.WindowSize()
-}
-
-func (m platformSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.layout = NewLayout(msg.Width, msg.Height)
-		m.updateTableSize()
-		return m, nil
-
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "q", "esc":
-			m.quitting = true
-			return m, tea.Quit
-		case "enter":
-			m.selected = m.table.Cursor()
-			m.quitting = true
-			return m, tea.Quit
-		}
-	}
-
-	var cmd tea.Cmd
-	m.table, cmd = m.table.Update(msg)
-	return m, cmd
-}
-
-func (m *platformSelectorModel) updateTableSize() {
-	// Use TableWidth from Layout
-	colWidth := m.layout.TableWidth
-	if colWidth < 20 {
-		colWidth = 20
-	}
-
-	columns := []table.Column{
-		{Title: "Platform", Width: colWidth},
-	}
-	m.table.SetColumns(columns)
-	m.table.SetHeight(m.layout.TableHeight)
-}
-
-func (m platformSelectorModel) View() string {
-	if m.quitting {
-		return ""
-	}
-
-	var contentBuilder strings.Builder
-
-	// Title
-	contentBuilder.WriteString(TitleStyle.Render("Select Platform"))
-	contentBuilder.WriteString("\n")
-	contentBuilder.WriteString(NormalStyle.Render(fmt.Sprintf("%d platforms available", len(m.platforms))))
-	contentBuilder.WriteString("\n\n")
-
-	// Table with full-width selection
-	contentBuilder.WriteString(renderTableWithFullWidthSelection(m.table, m.layout))
-
-	// Calculate available height for border
-	// Account for: 1 top margin + 2 border lines + 1 line after border + 1 hint line = 5 lines overhead
-	availableHeight := m.layout.ViewportHeight - 5
-	if availableHeight < 10 {
-		availableHeight = 10
-	}
-
-	// Border around content
-	borderedContent := BorderStyle.
-		Width(m.layout.InnerWidth).
-		Height(availableHeight).
-		Render(contentBuilder.String())
-
-	var result strings.Builder
-	result.WriteString("\n") // Top margin
-	result.WriteString(borderedContent)
-	result.WriteString("\n")
-	result.WriteString(" " + HintStyle.Render("↑/↓: navigate | Enter: select | q/Esc: back"))
-
-	return result.String()
-}
-
-// runPlatformSelectorTUI runs the platform selector TUI and returns the selected index
-func runPlatformSelectorTUI(platforms []api.Platform) (int, error) {
-	model := newPlatformSelectorModel(platforms)
-	p := tea.NewProgram(model, tea.WithAltScreen())
-	finalModel, err := p.Run()
-	if err != nil {
-		return -1, fmt.Errorf("platform selector error: %w", err)
-	}
-
-	result := finalModel.(platformSelectorModel)
-	return result.selected, nil
+	return RunSelector(SelectorConfig{
+		Title:    "Select Platform",
+		Subtitle: fmt.Sprintf("%d platforms available", len(platforms)),
+		HelpText: "↑/↓: navigate | Enter: select | q/Esc: back",
+		Items:    items,
+	})
 }
 
 // =============================================================================
-// Layer Action Selector TUI (bubbles/table, matching app style)
+// Layer Action Selector TUI - uses generic SelectorModel
 // =============================================================================
 
-// layerActionSelectorModel is the TUI model for selecting next action
-type layerActionSelectorModel struct {
-	table        table.Model
-	actions      []string
-	actionLabels []string
-	title        string
-	selected     string
-	quitting     bool
-	layout       Layout
-}
-
-func newLayerActionSelectorModel(currentLayer, totalLayers int, sourceLabel string) layerActionSelectorModel {
-	layout := DefaultLayout()
-
-	// Define actions and their labels
+// runLayerActionSelectorTUI runs the action selector TUI and returns the selected action
+func runLayerActionSelectorTUI(currentLayer, totalLayers int, sourceLabel string) (string, error) {
 	actions := []string{"next", "prev", "refresh", "done"}
 	actionLabels := []string{
 		"Next layer",
@@ -1452,446 +853,66 @@ func newLayerActionSelectorModel(currentLayer, totalLayers int, sourceLabel stri
 		"Done browsing",
 	}
 
-	// Build table rows
-	rows := make([]table.Row, len(actionLabels))
-	for i, label := range actionLabels {
-		rows[i] = table.Row{label}
-	}
-
-	// Single column for action names - use TableWidth from Layout
-	colWidth := layout.TableWidth
-	if colWidth < 20 {
-		colWidth = 20
-	}
-
-	columns := []table.Column{
-		{Title: "Action", Width: colWidth},
-	}
-
-	t := table.New(
-		table.WithColumns(columns),
-		table.WithRows(rows),
-		table.WithFocused(true),
-		table.WithHeight(len(rows)+2),
-	)
-
-	// Apply styles matching the app pattern
-	ApplyTableStyles(&t)
-
-	return layerActionSelectorModel{
-		table:        t,
-		actions:      actions,
-		actionLabels: actionLabels,
-		title:        fmt.Sprintf("Layer %d/%d (%s) - What next?", currentLayer, totalLayers, sourceLabel),
-		layout:       layout,
-	}
-}
-
-func (m layerActionSelectorModel) Init() tea.Cmd {
-	return tea.WindowSize()
-}
-
-func (m layerActionSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.layout = NewLayout(msg.Width, msg.Height)
-		m.updateTableSize()
-		return m, nil
-
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "q", "esc":
-			m.selected = "done" // Treat escape as done
-			m.quitting = true
-			return m, tea.Quit
-		case "enter":
-			cursor := m.table.Cursor()
-			if cursor >= 0 && cursor < len(m.actions) {
-				m.selected = m.actions[cursor]
-			}
-			m.quitting = true
-			return m, tea.Quit
-		}
-	}
-
-	var cmd tea.Cmd
-	m.table, cmd = m.table.Update(msg)
-	return m, cmd
-}
-
-func (m *layerActionSelectorModel) updateTableSize() {
-	// Use TableWidth from Layout
-	colWidth := m.layout.TableWidth
-	if colWidth < 20 {
-		colWidth = 20
-	}
-
-	columns := []table.Column{
-		{Title: "Action", Width: colWidth},
-	}
-	m.table.SetColumns(columns)
-}
-
-func (m layerActionSelectorModel) View() string {
-	if m.quitting {
-		return ""
-	}
-
-	var contentBuilder strings.Builder
-
-	// Title
-	contentBuilder.WriteString(TitleStyle.Render(m.title))
-	contentBuilder.WriteString("\n\n")
-
-	// Table with full-width selection
-	contentBuilder.WriteString(renderTableWithFullWidthSelection(m.table, m.layout))
-
-	// Calculate available height for border
-	// Account for: 1 top margin + 2 border lines + 1 line after border + 1 hint line = 5 lines overhead
-	availableHeight := m.layout.ViewportHeight - 5
-	if availableHeight < 10 {
-		availableHeight = 10
-	}
-
-	// Border around content
-	borderedContent := BorderStyle.
-		Width(m.layout.InnerWidth).
-		Height(availableHeight).
-		Render(contentBuilder.String())
-
-	var result strings.Builder
-	result.WriteString("\n") // Top margin
-	result.WriteString(borderedContent)
-	result.WriteString("\n")
-	result.WriteString(" " + HintStyle.Render("↑/↓: navigate | Enter: select | q/Esc: done"))
-
-	return result.String()
-}
-
-// runLayerActionSelectorTUI runs the action selector TUI and returns the selected action
-func runLayerActionSelectorTUI(currentLayer, totalLayers int, sourceLabel string) (string, error) {
-	model := newLayerActionSelectorModel(currentLayer, totalLayers, sourceLabel)
-	p := tea.NewProgram(model, tea.WithAltScreen())
-	finalModel, err := p.Run()
+	idx, err := RunSelector(SelectorConfig{
+		Title:    fmt.Sprintf("Layer %d/%d (%s) - What next?", currentLayer, totalLayers, sourceLabel),
+		HelpText: "↑/↓: navigate | Enter: select | q/Esc: done",
+		Items:    actionLabels,
+		Values:   actions,
+	})
 	if err != nil {
-		return "", fmt.Errorf("action selector error: %w", err)
+		return "", err
 	}
-
-	result := finalModel.(layerActionSelectorModel)
-	return result.selected, nil
+	if idx < 0 {
+		return "done", nil // Treat cancel as done
+	}
+	return actions[idx], nil
 }
 
 // =============================================================================
-// Tag Selector TUI (bubbles/table, matching app style)
+// Tag Selector TUI - uses generic SelectorModel
 // =============================================================================
 
-// tagSelectorModel is the TUI model for selecting a tag using a table
-type tagSelectorModel struct {
-	table     table.Model
-	tags      []string
-	imageName string
-	selected  string
-	quitting  bool
-	layout    Layout
-}
-
-func newTagSelectorModel(imageName string, tags []string) tagSelectorModel {
-	layout := DefaultLayout()
-
-	// Build table rows
-	rows := make([]table.Row, len(tags))
-	for i, tag := range tags {
-		rows[i] = table.Row{tag}
+// runTagSelectorTUI runs the tag selector TUI and returns the selected tag
+func runTagSelectorTUI(imageName string, tags []string) (string, error) {
+	idx, err := RunSelector(SelectorConfig{
+		Title:    fmt.Sprintf("Select tag for %s", imageName),
+		Subtitle: fmt.Sprintf("%d tags available", len(tags)),
+		HelpText: "↑/↓: navigate | Enter: select | q/Esc: back",
+		Items:    tags,
+	})
+	if err != nil {
+		return "", err
 	}
-
-	// Single column for tag names - use TableWidth from Layout
-	colWidth := layout.TableWidth
-	if colWidth < 20 {
-		colWidth = 20
+	if idx < 0 || idx >= len(tags) {
+		return "", nil
 	}
-
-	columns := []table.Column{
-		{Title: "Tag", Width: colWidth},
-	}
-
-	// Calculate table height for tag selector's specific layout:
-	// Content before table: title(1) + newline(1) + divider(1) + newline(1) + tagCount(1) + doubleNewline(2) = 7
-	// Box overhead: main box borders(2) + footer box(3) + spacing(1) = 6
-	// Table render margin (bubbles/table header chrome): 4
-	const (
-		contentBeforeTable   = 7
-		boxOverhead          = 6
-		tagTableRenderMargin = 4
-		minTagTableHeight    = 5
-	)
-	tableHeight := layout.ViewportHeight - contentBeforeTable - boxOverhead + tagTableRenderMargin
-	if tableHeight < minTagTableHeight {
-		tableHeight = minTagTableHeight
-	}
-
-	t := table.New(
-		table.WithColumns(columns),
-		table.WithRows(rows),
-		table.WithFocused(true),
-		table.WithHeight(tableHeight),
-	)
-
-	// Apply styles matching the app pattern
-	ApplyTableStyles(&t)
-
-	return tagSelectorModel{
-		table:     t,
-		tags:      tags,
-		imageName: imageName,
-		layout:    layout,
-	}
-}
-
-func (m tagSelectorModel) Init() tea.Cmd {
-	return tea.WindowSize()
-}
-
-func (m tagSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.layout = NewLayout(msg.Width, msg.Height)
-		m.updateTableSize()
-		return m, nil
-
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "q", "esc":
-			m.quitting = true
-			return m, tea.Quit
-		case "enter":
-			cursor := m.table.Cursor()
-			if cursor >= 0 && cursor < len(m.tags) {
-				m.selected = m.tags[cursor]
-			}
-			m.quitting = true
-			return m, tea.Quit
-		}
-	}
-
-	var cmd tea.Cmd
-	m.table, cmd = m.table.Update(msg)
-	return m, cmd
-}
-
-func (m *tagSelectorModel) updateTableSize() {
-	// Use TableWidth from Layout
-	colWidth := m.layout.TableWidth
-	if colWidth < 20 {
-		colWidth = 20
-	}
-
-	columns := []table.Column{
-		{Title: "Tag", Width: colWidth},
-	}
-	m.table.SetColumns(columns)
-
-	const (
-		contentBeforeTable   = 7
-		boxOverhead          = 6
-		tagTableRenderMargin = 4
-		minTagTableHeight    = 5
-	)
-	tableHeight := m.layout.ViewportHeight - contentBeforeTable - boxOverhead + tagTableRenderMargin
-	if tableHeight < minTagTableHeight {
-		tableHeight = minTagTableHeight
-	}
-	m.table.SetHeight(tableHeight)
-}
-
-func (m tagSelectorModel) View() string {
-	if m.quitting {
-		return ""
-	}
-
-	var contentBuilder strings.Builder
-
-	// Title
-	contentBuilder.WriteString(TitleStyle.Render(fmt.Sprintf("Select tag for %s", m.imageName)))
-	contentBuilder.WriteString("\n")
-	// White divider after title
-	contentBuilder.WriteString(strings.Repeat("─", m.layout.InnerWidth))
-	contentBuilder.WriteString("\n")
-	contentBuilder.WriteString(NormalStyle.Render(fmt.Sprintf("%d tags available", len(m.tags))))
-	contentBuilder.WriteString("\n\n")
-
-	// Table with full-width selection
-	contentBuilder.WriteString(renderTableWithFullWidthSelection(m.table, m.layout))
-
-	// Get the content string
-	content := contentBuilder.String()
-
-	// Calculate available height for main content box
-	// Subtract: footer box (3 lines: 1 content + 2 border) + spacing (1 line) + border overhead (2 lines)
-	mainAvailableHeight := m.layout.ViewportHeight - 6
-	if mainAvailableHeight < 10 {
-		mainAvailableHeight = 10
-	}
-
-	// Pad content to fill available height
-	contentLines := strings.Count(content, "\n")
-	if contentLines < mainAvailableHeight {
-		content += strings.Repeat("\n", mainAvailableHeight-contentLines)
-	}
-
-	// Build result with two-box layout
-	var result strings.Builder
-
-	// First box: Main content (red border)
-	mainBordered := BorderStyle.
-		Width(m.layout.InnerWidth).
-		Height(mainAvailableHeight).
-		Render(content)
-	result.WriteString(mainBordered)
-	result.WriteString("\n") // Spacing between boxes
-
-	// Second box: Help text (white border, 1 row high)
-	helpText := "↑/↓: navigate | Enter: select | q/Esc: back"
-	textWidth := len(helpText)
-	padding := (m.layout.InnerWidth - textWidth) / 2
-	var footerContent strings.Builder
-	if padding > 0 {
-		footerContent.WriteString(strings.Repeat(" ", padding))
-	}
-	footerContent.WriteString(HintStyle.Render(helpText))
-	// Fill remaining space
-	remaining := m.layout.InnerWidth - padding - textWidth
-	if remaining > 0 {
-		footerContent.WriteString(strings.Repeat(" ", remaining))
-	}
-
-	// Apply white border to footer
-	footerBordered := NewBorderStyleWithColor(colorWhite).
-		Width(m.layout.InnerWidth).
-		Height(1).
-		Render(footerContent.String())
-	result.WriteString(footerBordered)
-
-	return result.String()
+	return tags[idx], nil
 }
 
 // =============================================================================
-// Tag Input TUI (bubbles/textinput, for fallback when tags can't be fetched)
+// Tag Input TUI - uses generic InputModel (fallback when tags can't be fetched)
 // =============================================================================
 
-// tagInputModel is the TUI model for manually entering a tag
-type tagInputModel struct {
-	textInput textinput.Model
-	imageName string
-	errorMsg  string
-	done      bool
-	cancelled bool
-	layout    Layout
-}
-
-func newTagInputModel(imageName string, fetchErr error) tagInputModel {
-	ti := textinput.New()
-	ti.Placeholder = "latest"
-	ti.Focus()
-	ti.CharLimit = 100
-	// ti.Width is set dynamically in Update() on tea.WindowSizeMsg
-
-	errMsg := ""
-	if fetchErr != nil {
-		errMsg = fmt.Sprintf("Could not fetch tags: %v", fetchErr)
-	}
-
-	layout := DefaultLayout()
-	// Set initial width based on default layout
-	ti.Width = layout.InnerWidth - 10
-
-	return tagInputModel{
-		textInput: ti,
-		imageName: imageName,
-		errorMsg:  errMsg,
-		layout:    layout,
-	}
-}
-
-func (m tagInputModel) Init() tea.Cmd {
-	return tea.Batch(tea.WindowSize(), textinput.Blink)
-}
-
-func (m tagInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
-
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.layout = NewLayout(msg.Width, msg.Height)
-		m.textInput.Width = m.layout.InnerWidth - 10
-		return m, nil
-
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "ctrl+c", "esc":
-			m.cancelled = true
-			return m, tea.Quit
-		case "enter":
-			m.done = true
-			return m, tea.Quit
-		}
-	}
-
-	m.textInput, cmd = m.textInput.Update(msg)
-	return m, cmd
-}
-
-func (m tagInputModel) View() string {
-	var contentBuilder strings.Builder
-
-	// Title
-	contentBuilder.WriteString(TitleStyle.Render(fmt.Sprintf("Enter tag for %s", m.imageName)))
-	contentBuilder.WriteString("\n")
-	if m.errorMsg != "" {
-		contentBuilder.WriteString(DimStyle.Render(m.errorMsg))
-		contentBuilder.WriteString("\n")
-	}
-	contentBuilder.WriteString("\n")
-
-	// Text input
-	contentBuilder.WriteString(m.textInput.View())
-
-	// Calculate available height for border
-	// Account for: 1 top margin + 2 border lines + 1 line after border + 1 hint line = 5 lines overhead
-	availableHeight := m.layout.ViewportHeight - 5
-	if availableHeight < 10 {
-		availableHeight = 10
-	}
-
-	// Border around content
-	borderedContent := BorderStyle.
-		Width(m.layout.InnerWidth).
-		Height(availableHeight).
-		Render(contentBuilder.String())
-
-	var result strings.Builder
-	result.WriteString("\n") // Top margin
-	result.WriteString(borderedContent)
-	result.WriteString("\n")
-	result.WriteString(" " + HintStyle.Render("Enter: confirm | Esc: cancel"))
-
-	return result.String()
-}
-
-// runTagInputTUI runs the tag input TUI and returns the entered tag
+// runTagInputTUI runs the tag input TUI using generic InputModel and returns the entered tag
 func runTagInputTUI(imageName string, fetchErr error) (string, error) {
-	model := newTagInputModel(imageName, fetchErr)
-	p := tea.NewProgram(model, tea.WithAltScreen())
-	finalModel, err := p.Run()
+	subtitle := ""
+	if fetchErr != nil {
+		subtitle = fmt.Sprintf("Could not fetch tags: %v", fetchErr)
+	}
+
+	value, cancelled, err := RunInput(InputConfig{
+		Title:       fmt.Sprintf("Enter tag for %s", imageName),
+		Subtitle:    subtitle,
+		Placeholder: "latest",
+		HelpText:    "Enter: confirm | Esc: cancel",
+	})
 	if err != nil {
 		return "", fmt.Errorf("input error: %w", err)
 	}
-
-	result := finalModel.(tagInputModel)
-	if result.cancelled {
+	if cancelled {
 		return "", fmt.Errorf("cancelled")
 	}
-
-	return result.textInput.Value(), nil
+	return value, nil
 }
 
 // PromptForTag prompts the user to select a tag from available tags
@@ -1902,12 +923,9 @@ func PromptForTag(imageName string) (string, error) {
 	var tags []string
 	var fetchErr error
 
-	err := spinner.New().
-		Title(fmt.Sprintf("Fetching tags for %s...", imageName)).
-		Action(func() {
-			tags, fetchErr = client.ListTags(imageName)
-		}).
-		Run()
+	err := RunWithSpinner(fmt.Sprintf("Fetching tags for %s...", imageName), func() {
+		tags, fetchErr = client.ListTags(imageName)
+	})
 
 	if err != nil {
 		return "", fmt.Errorf("spinner error: %w", err)
@@ -1945,190 +963,27 @@ func PromptForTag(imageName string) (string, error) {
 	}
 
 	// Run the tag selector TUI
-	model := newTagSelectorModel(imageName, tags)
-	p := tea.NewProgram(model, tea.WithAltScreen())
-	finalModel, err := p.Run()
+	selected, err := runTagSelectorTUI(imageName, tags)
 	if err != nil {
 		return "", fmt.Errorf("tag selector error: %w", err)
 	}
-
-	result := finalModel.(tagSelectorModel)
-	if result.selected == "" {
+	if selected == "" {
 		return "", fmt.Errorf("no tag selected")
 	}
 
-	return result.selected, nil
+	return selected, nil
 }
 
-// cachedImageTableModel is the Bubble Tea model for cached image selection
-type cachedImageTableModel struct {
-	table    table.Model
-	rows     []db.CachedImageRow
-	selected int
-	quitting bool
-	layout   Layout
-}
-
-func newCachedImageTableModel(rows []db.CachedImageRow) cachedImageTableModel {
-	layout := DefaultLayout()
-
-	// Use InnerWidth for full-width selector highlighting
-	totalW := layout.InnerWidth
-	if totalW < 40 {
-		totalW = 40
+// CachedImagesColumns returns column specs for cached images table.
+func CachedImagesColumns() []ColumnSpec {
+	return []ColumnSpec{
+		{Title: "Image", FlexRatio: 90, MinWidth: 20},
+		{Title: "Layers", FixedWidth: 10},
 	}
-	layersW := 10
-	imageW := totalW - layersW // Image column fills remaining space
-
-	columns := []table.Column{
-		{Title: "Image", Width: imageW},
-		{Title: "Layers", Width: layersW},
-	}
-
-	tableRows := make([]table.Row, len(rows))
-	for i, row := range rows {
-		tableRows[i] = table.Row{
-			row.ImageRef,
-			fmt.Sprintf("%d", row.LayerCount),
-		}
-	}
-
-	t := table.New(
-		table.WithColumns(columns),
-		table.WithRows(tableRows),
-		table.WithFocused(true),
-		table.WithHeight(layout.TableHeight),
-	)
-
-	ApplyTableStyles(&t)
-
-	return cachedImageTableModel{
-		table:    t,
-		rows:     rows,
-		selected: -1,
-		layout:   layout,
-	}
-}
-
-func (m cachedImageTableModel) Init() tea.Cmd {
-	return tea.WindowSize()
-}
-
-func (m cachedImageTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
-
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.layout = NewLayout(msg.Width, msg.Height)
-		m.updateTableSize()
-		return m, nil
-
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "q", "esc":
-			m.quitting = true
-			return m, tea.Quit
-		case "enter":
-			m.selected = m.table.Cursor()
-			m.quitting = true
-			return m, tea.Quit
-		}
-	}
-
-	m.table, cmd = m.table.Update(msg)
-	return m, cmd
-}
-
-func (m *cachedImageTableModel) updateTableSize() {
-	// Use InnerWidth for full-width selector highlighting
-	totalW := m.layout.InnerWidth
-	if totalW < 40 {
-		totalW = 40
-	}
-
-	layersW := 10
-	imageW := totalW - layersW // Image column fills remaining space
-
-	columns := []table.Column{
-		{Title: "Image", Width: imageW},
-		{Title: "Layers", Width: layersW},
-	}
-	m.table.SetColumns(columns)
-	m.table.SetHeight(m.layout.TableHeight)
-}
-
-func (m cachedImageTableModel) View() string {
-	if m.quitting {
-		return ""
-	}
-
-	var contentBuilder strings.Builder
-
-	// Title
-	contentBuilder.WriteString(TitleStyle.Render("Cached Layer Inspections"))
-	contentBuilder.WriteString("\n")
-	// White divider after title
-	contentBuilder.WriteString(strings.Repeat("─", m.layout.InnerWidth))
-	contentBuilder.WriteString("\n")
-	contentBuilder.WriteString(NormalStyle.Render(fmt.Sprintf("%d images in cache", len(m.rows))))
-	contentBuilder.WriteString("\n\n")
-
-	// Table with full-width selection
-	contentBuilder.WriteString(renderTableWithFullWidthSelection(m.table, m.layout))
-
-	// Get the content string
-	content := contentBuilder.String()
-
-	// Calculate available height for main content box
-	// Subtract: footer box (3 lines: 1 content + 2 border) + spacing (1 line) + border overhead (2 lines)
-	mainAvailableHeight := m.layout.ViewportHeight - 6
-	if mainAvailableHeight < 10 {
-		mainAvailableHeight = 10
-	}
-
-	// Pad content to fill available height
-	contentLines := strings.Count(content, "\n")
-	if contentLines < mainAvailableHeight {
-		content += strings.Repeat("\n", mainAvailableHeight-contentLines)
-	}
-
-	// Build result with two-box layout
-	var result strings.Builder
-
-	// First box: Main content (red border)
-	mainBordered := BorderStyle.
-		Width(m.layout.InnerWidth).
-		Height(mainAvailableHeight).
-		Render(content)
-	result.WriteString(mainBordered)
-	result.WriteString("\n") // Spacing between boxes
-
-	// Second box: Help text (white border, 1 row high)
-	helpText := "enter: select | q/esc: back"
-	textWidth := len(helpText)
-	padding := (m.layout.InnerWidth - textWidth) / 2
-	var footerContent strings.Builder
-	if padding > 0 {
-		footerContent.WriteString(strings.Repeat(" ", padding))
-	}
-	footerContent.WriteString(HintStyle.Render(helpText))
-	// Fill remaining space
-	remaining := m.layout.InnerWidth - padding - textWidth
-	if remaining > 0 {
-		footerContent.WriteString(strings.Repeat(" ", remaining))
-	}
-
-	// Apply white border to footer
-	footerBordered := NewBorderStyleWithColor(colorWhite).
-		Width(m.layout.InnerWidth).
-		Height(1).
-		Render(footerContent.String())
-	result.WriteString(footerBordered)
-
-	return result.String()
 }
 
 // RunCachedLayersBrowser shows cached layer inspections from the database
+// Uses TabbedTableModel for consistent UI
 func RunCachedLayersBrowser(database *db.DB) error {
 	if database == nil {
 		return fmt.Errorf("database not available")
@@ -2147,20 +1002,30 @@ func RunCachedLayersBrowser(database *db.DB) error {
 			return nil
 		}
 
-		// Run table selector
-		model := newCachedImageTableModel(rows)
-		p := tea.NewProgram(model, tea.WithAltScreen())
-		finalModel, err := p.Run()
+		// Build table rows
+		tableRows := make([]table.Row, len(rows))
+		for i, row := range rows {
+			tableRows[i] = table.Row{
+				row.ImageRef,
+				fmt.Sprintf("%d", row.LayerCount),
+			}
+		}
+
+		// Use TabbedTableModel (single page for cached images)
+		result, err := NewTabbedTable("Cached Layer Inspections").
+			WithSubtitle(fmt.Sprintf("%d images in cache", len(rows))).
+			WithHelpText("Enter: select | q/Esc: back").
+			AddPage("Images", CachedImagesColumns(), tableRows).
+			Run()
+
 		if err != nil {
 			return fmt.Errorf("image table error: %w", err)
 		}
-
-		m := finalModel.(cachedImageTableModel)
-		if m.selected < 0 || m.selected >= len(rows) {
+		if result.Cancelled || result.SelectedRow < 0 || result.SelectedRow >= len(rows) {
 			return nil // Back or invalid selection
 		}
 
-		selectedImage := rows[m.selected].ImageRef
+		selectedImage := rows[result.SelectedRow].ImageRef
 
 		// Show layers for selected image
 		if err := showCachedLayersForImage(database, selectedImage); err != nil {
@@ -2169,7 +1034,18 @@ func RunCachedLayersBrowser(database *db.DB) error {
 	}
 }
 
+// CachedLayerDetailColumns returns column specs for cached layer detail table.
+func CachedLayerDetailColumns() []ColumnSpec {
+	return []ColumnSpec{
+		{Title: "Layer", FixedWidth: 8},
+		{Title: "Digest", FlexRatio: 100, MinWidth: 12},
+		{Title: "Size", FixedWidth: 12},
+		{Title: "Entries", FixedWidth: 10},
+	}
+}
+
 // layerTableModel is the Bubble Tea model for layer selection using a table
+// This model includes download functionality (d key) which requires custom handling.
 type layerTableModel struct {
 	table    table.Model
 	layers   []db.LayerInspection
@@ -2180,49 +1056,13 @@ type layerTableModel struct {
 }
 
 func (m *layerTableModel) updateTableSize() {
-	// Use InnerWidth for full-width selector highlighting
-	totalW := m.layout.InnerWidth
-	if totalW < 50 {
-		totalW = 50
-	}
-
-	// Fixed widths for Layer, Size, Entries; Digest fills remaining space
-	layerW := 8
-	sizeW := 12
-	entriesW := 10
-	digestW := totalW - layerW - sizeW - entriesW
-
-	columns := []table.Column{
-		{Title: "Layer", Width: layerW},
-		{Title: "Digest", Width: digestW},
-		{Title: "Size", Width: sizeW},
-		{Title: "Entries", Width: entriesW},
-	}
-
+	columns := CalculateColumns(CachedLayerDetailColumns(), m.layout.TableWidth)
 	m.table.SetColumns(columns)
 	m.table.SetHeight(m.layout.TableHeight)
 }
 
 func newLayerTableModel(imageRef string, layers []db.LayerInspection) layerTableModel {
 	layout := DefaultLayout()
-
-	// Use InnerWidth for full-width selector highlighting
-	totalW := layout.InnerWidth
-	if totalW < 50 {
-		totalW = 50
-	}
-
-	layerW := 8
-	sizeW := 12
-	entriesW := 10
-	digestW := totalW - layerW - sizeW - entriesW
-
-	columns := []table.Column{
-		{Title: "Layer", Width: layerW},
-		{Title: "Digest", Width: digestW},
-		{Title: "Size", Width: sizeW},
-		{Title: "Entries", Width: entriesW},
-	}
 
 	// Build rows - highest layers first
 	rows := make([]table.Row, len(layers))
@@ -2236,15 +1076,9 @@ func newLayerTableModel(imageRef string, layers []db.LayerInspection) layerTable
 		}
 	}
 
-	t := table.New(
-		table.WithColumns(columns),
-		table.WithRows(rows),
-		table.WithFocused(true),
-		table.WithHeight(layout.TableHeight),
-	)
-
-	// Apply standard table styles (same as cachedImageTableModel)
-	ApplyTableStyles(&t)
+	// Use InitTable for standard table setup
+	columns := CalculateColumns(CachedLayerDetailColumns(), layout.TableWidth)
+	t := InitTable(columns, rows, layout)
 
 	return layerTableModel{
 		table:    t,
@@ -2256,7 +1090,7 @@ func newLayerTableModel(imageRef string, layers []db.LayerInspection) layerTable
 }
 
 func (m layerTableModel) Init() tea.Cmd {
-	return tea.WindowSize()
+	return StandardInit()
 }
 
 func (m layerTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -2298,37 +1132,20 @@ func (m layerTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m layerTableModel) View() string {
-	var contentBuilder strings.Builder
-
-	// Title
-	contentBuilder.WriteString(TitleStyle.Render(fmt.Sprintf("%s - Select Layer (%d cached)", m.imageRef, len(m.layers))))
-	contentBuilder.WriteString("\n")
-	// White divider after title (Bug #8 fix)
-	contentBuilder.WriteString(strings.Repeat("─", m.layout.InnerWidth))
-	contentBuilder.WriteString("\n\n")
-
-	// Table with full-width selection
-	contentBuilder.WriteString(renderTableWithFullWidthSelection(m.table, m.layout))
-
-	// Calculate available height for border (Bug #8 fix - was missing height)
-	availableHeight := m.layout.ViewportHeight - 4
-	if availableHeight < 10 {
-		availableHeight = 10
+	if m.quitting {
+		return ""
 	}
 
-	// Border around content with BOTH width AND height (Bug #8 fix)
-	borderedContent := BorderStyle.
-		Width(m.layout.InnerWidth).
-		Height(availableHeight).
-		Render(contentBuilder.String())
+	var content strings.Builder
 
-	var result strings.Builder
-	result.WriteString("\n") // Top margin
-	result.WriteString(borderedContent)
-	result.WriteString("\n")
-	result.WriteString(" " + HintStyle.Render("enter: browse | d: download | q/esc: back"))
+	// Header with title
+	content.WriteString(ViewHeader(fmt.Sprintf("%s - Select Layer (%d cached)", m.imageRef, len(m.layers)), m.layout.InnerWidth))
 
-	return result.String()
+	// Table with full-width selection
+	content.WriteString(RenderTableWithSelection(m.table, m.layout))
+
+	// Use TwoBoxView for consistent layout
+	return TwoBoxView(content.String(), "Enter: browse | d: download | q/Esc: back", m.layout)
 }
 
 func showCachedLayersForImage(database *db.DB, imageRef string) error {
