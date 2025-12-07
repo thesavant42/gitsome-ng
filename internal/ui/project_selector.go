@@ -74,6 +74,20 @@ func (m ProjectSelectorModel) handleSelectMode(msg tea.KeyMsg) (tea.Model, tea.C
 			m.cursor++
 		}
 
+	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+		// Handle numeric hotkeys for projects (1-9)
+		num := int(msg.String()[0] - '0') // Convert '1'-'9' to 1-9
+		index := num - 1                  // Convert to 0-based index
+		if index >= 0 && index < len(m.projects) {
+			// Valid project number - select and open immediately
+			m.result = &ProjectResult{
+				Action:      "open",
+				ProjectPath: m.projects[index],
+			}
+			m.quitting = true
+			return m, tea.Quit
+		}
+
 	case "enter":
 		if m.cursor < len(m.projects) {
 			// Selected existing project
@@ -168,7 +182,7 @@ func (m ProjectSelectorModel) View() string {
 	} else {
 		for i, proj := range m.projects {
 			displayName := strings.TrimSuffix(proj, filepath.Ext(proj))
-			b.WriteString(RenderListItem(displayName, i == m.cursor, m.layout.InnerWidth))
+			b.WriteString(RenderNumberedItem(i+1, displayName, i == m.cursor, m.layout.InnerWidth))
 			b.WriteString("\n")
 		}
 		b.WriteString("\n")
@@ -183,7 +197,8 @@ func (m ProjectSelectorModel) View() string {
 	b.WriteString("\n")
 
 	// Use TwoBoxView helper for standard two-box layout
-	return TwoBoxView(b.String(), "up/down: navigate | Enter: select | q: quit", m.layout)
+	helpText := "1-9: open project | ↑/↓: navigate | Enter: select | q: quit"
+	return TwoBoxView(b.String(), helpText, m.layout)
 }
 
 // Result returns the user's selection after the program exits

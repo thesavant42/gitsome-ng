@@ -50,10 +50,10 @@ func RenderTableWithSelection(t table.Model, layout Layout) string {
 	visibleCursorIndex := cursor - start
 
 	for i, line := range lines {
-		// Header row (line 0) - render with full width, then add our divider
+		// Header row (line 0) - render then add divider
 		if i == 0 {
-			result = append(result, NormalStyle.Width(layout.InnerWidth).Render(line))
-			// Add divider after header - use InnerWidth for full width
+			result = append(result, NormalStyle.Render(line))
+			// Add divider after header
 			result = append(result, strings.Repeat("─", layout.InnerWidth))
 			continue
 		}
@@ -62,16 +62,20 @@ func RenderTableWithSelection(t table.Model, layout Layout) string {
 		// dataRowIndex is 0-based index into visible rows
 		dataRowIndex := i - 1
 
-		// Apply full-width selection styling to the visible cursor row
+		// Apply selection styling to the visible cursor row
 		// Strip ANSI codes first to prevent embedded reset codes from killing the background
 		if dataRowIndex == visibleCursorIndex {
 			cleanLine := stripANSI(line)
-			result = append(result, SelectedStyle.Width(layout.InnerWidth).Render(cleanLine))
+			// Pad line to minimum width for selection highlight
+			if StringWidth(cleanLine) < layout.InnerWidth {
+				cleanLine = cleanLine + strings.Repeat(" ", layout.InnerWidth-StringWidth(cleanLine))
+			}
+			result = append(result, SelectedStyle.Render(cleanLine))
 			continue
 		}
 
-		// Non-selected data rows - apply normal text color with full width
-		result = append(result, NormalStyle.Width(layout.InnerWidth).Render(line))
+		// Non-selected data rows - render without width constraint
+		result = append(result, NormalStyle.Render(line))
 	}
 
 	return strings.Join(result, "\n")

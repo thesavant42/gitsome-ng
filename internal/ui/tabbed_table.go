@@ -57,12 +57,14 @@ type TabbedTableResult struct {
 // TabbedTableModel is a generic multi-page table viewer.
 // Embed configuration, manage per-page tables, handle tab switching.
 type TabbedTableModel struct {
-	config      TabbedTableConfig
-	tables      []table.Model // One table per page
-	currentPage int
-	layout      Layout
-	result      TabbedTableResult
-	quitting    bool
+	config        TabbedTableConfig
+	tables        []table.Model // One table per page
+	currentPage   int
+	layout        Layout
+	result        TabbedTableResult
+	quitting      bool
+	viewMode      string // "table" or "detail"
+	detailContent string // Full content when viewing detail
 }
 
 // NewTabbedTableModel creates a new tabbed table viewer.
@@ -118,6 +120,7 @@ func NewTabbedTableModel(cfg TabbedTableConfig) TabbedTableModel {
 			SelectedRow:  -1,
 			Cancelled:    false,
 		},
+		viewMode: "table",
 	}
 }
 
@@ -126,49 +129,40 @@ func NewTabbedTableModel(cfg TabbedTableConfig) TabbedTableModel {
 // =============================================================================
 
 // calculateTableHeight computes the actual table height based on content overhead.
-// This is critical to prevent rows from being hidden behind viewport boundaries.
 func calculateTableHeight(cfg TabbedTableConfig, layout Layout) int {
-	// Calculate content lines BEFORE table in View():
-	// - Title + newline = 2 lines
-	contentLines := 2
+	// BuildTwoBoxView gives us: mainAvailableHeight = ViewportHeight - 6
+	mainAvailableHeight := layout.ViewportHeight - 6
 
-	// - Tab indicator (if multiple pages) + newline = 2 lines
+	// Count rendered lines:
+	// 1. Title = 1 line
+	overhead := 1
+
+	// 2. Tab indicator (if present) = 1 line
 	if len(cfg.Pages) > 1 {
-		contentLines += 2
+		overhead += 1
 	}
 
-	// - Divider + 2 newlines = 3 lines
-	contentLines += 3
+	// 3. Divider = 1 line
+	overhead += 1
 
-	// - Subtitle (if present) + 2 newlines = 3 lines
+	// 4. Subtitle (if present) = 1 line
 	if cfg.Subtitle != "" {
-		contentLines += 3
+		overhead += 1
 	}
 
-	// RenderTableWithSelection adds:
-	// - Header row (1 line)
-	// - Extra divider after header (1 line)
-	// - Data rows (N lines based on height)
-	// So we need to account for header + divider = 2 extra lines
-	const tableHeaderOverhead = 2
+	// 5. RenderTableWithSelection outputs: header + divider + data rows
+	//    For table.WithHeight(N), RenderTableWithSelection outputs N+2 lines
+	overhead += 2
 
-	// Total overhead: TwoBoxView adds main box borders (2) + footer (3) + spacing (1) = 6
-	// Plus our content lines before the table
-	// Plus table's own header rendering overhead
-	totalOverhead := 6 + contentLines + tableHeaderOverhead
+	// Available for data rows
+	tableHeight := mainAvailableHeight - overhead
 
-	// Available height for table DATA ROWS
-	tableHeight := layout.ViewportHeight - totalOverhead
-
-	// Ensure minimum
 	if tableHeight < MinTableHeight {
 		tableHeight = MinTableHeight
 	}
 
 	return tableHeight
-}
-
-// =============================================================================
+} // =============================================================================
 // Bubble Tea Interface
 // =============================================================================
 
@@ -201,6 +195,13 @@ func (m TabbedTableModel) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Global keys (work on all pages)
 	switch key {
 	case "esc":
+		// If in detail view, go back to table view
+		if m.viewMode == "detail" {
+			m.viewMode = "table"
+			m.detailContent = ""
+			return m, nil
+		}
+		// Otherwise, quit
 		m.result.Cancelled = true
 		m.quitting = true
 		return m, tea.Quit
@@ -225,14 +226,20 @@ func (m TabbedTableModel) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch key {
 	case "enter":
-		// Only process enter on non-read-only pages
-		if !currentPage.ReadOnly {
-			cursor := m.tables[m.currentPage].Cursor()
-			if cursor >= 0 && cursor < len(currentPage.Rows) {
+		cursor := m.tables[m.currentPage].Cursor()
+		if cursor >= 0 && cursor < len(currentPage.Rows) {
+			if !currentPage.ReadOnly {
+				// Selectable page - return selection
 				m.result.SelectedPage = m.currentPage
 				m.result.SelectedRow = cursor
 				m.quitting = true
 				return m, tea.Quit
+			} else {
+				// Read-only page - show detail view
+				row := currentPage.Rows[cursor]
+				// Join all columns with space separator
+				m.detailContent = strings.Join(row, " ")
+				m.viewMode = "detail"
 			}
 		}
 		return m, nil
@@ -301,6 +308,11 @@ func (m TabbedTableModel) View() string {
 		return ""
 	}
 
+	// Render detail view if active
+	if m.viewMode == "detail" {
+		return m.renderDetailView()
+	}
+
 	var content strings.Builder
 
 	// Title
@@ -335,6 +347,58 @@ func (m TabbedTableModel) View() string {
 
 	// Use TwoBoxView for consistent layout
 	return TwoBoxView(content.String(), helpText, m.layout)
+}
+
+func (m TabbedTableModel) renderDetailView() string {
+	var content strings.Builder
+
+	// Title
+	currentPage := m.config.Pages[m.currentPage]
+	content.WriteString(RenderTitle(currentPage.Name + " - Detail View"))
+	content.WriteString("\n")
+	content.WriteString(strings.Repeat("─", m.layout.InnerWidth))
+	content.WriteString("\n\n")
+
+	// Wrap content to fit width (simple line-by-line wrapping)
+	wrapped := wrapTextToLines(m.detailContent, m.layout.InnerWidth)
+	content.WriteString(NormalStyle.Render(wrapped))
+
+	// Use TwoBoxView for consistent layout
+	helpText := "Esc: back to table"
+	return TwoBoxView(content.String(), helpText, m.layout)
+}
+
+// wrapTextToLines wraps text to fit within width, returning formatted string with newlines
+func wrapTextToLines(text string, width int) string {
+	if width <= 0 || len(text) <= width {
+		return text
+	}
+
+	var result strings.Builder
+	remaining := text
+
+	for len(remaining) > 0 {
+		if len(remaining) <= width {
+			result.WriteString(remaining)
+			break
+		}
+
+		// Find a good break point
+		breakPoint := width
+		for i := width; i > width/2; i-- {
+			c := remaining[i-1]
+			if c == ' ' || c == '/' || c == '-' || c == '=' || c == '&' {
+				breakPoint = i
+				break
+			}
+		}
+
+		result.WriteString(remaining[:breakPoint])
+		result.WriteString("\n")
+		remaining = remaining[breakPoint:]
+	}
+
+	return result.String()
 }
 
 func (m TabbedTableModel) renderTabIndicator() string {

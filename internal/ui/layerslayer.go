@@ -441,7 +441,7 @@ func runLayerSelectorTabbedTUI(imageRef string, layers []api.Layer, buildSteps [
 
 	// Set help text
 	if len(buildSteps) > 0 {
-		builder.WithHelpText("↑/↓: navigate | Tab/←/→: build steps | Enter: select | Esc: back")
+		builder.WithHelpText("↑/↓: navigate | Tab/←/→: switch page | Enter: select/view | Esc: back")
 	} else {
 		builder.WithHelpText("↑/↓: navigate | Enter: select | Esc: back")
 	}
@@ -502,21 +502,10 @@ func buildBuildStepsRows(buildSteps []string) []table.Row {
 		return []table.Row{{"No build steps available"}}
 	}
 
-	// Use conservative wrap width - actual width will be set by column calculation
-	// This is just for initial row creation; table will wrap based on actual column width
-	wrapWidth := 200 // Wide default - let table column width control actual display
-
 	var rows []table.Row
 	for i, step := range buildSteps {
 		step = strings.TrimSpace(step)
-		wrapped := wrapBuildStep(step, wrapWidth)
-		for j, line := range wrapped {
-			if j == 0 {
-				rows = append(rows, table.Row{fmt.Sprintf("[%2d] %s", i, line)})
-			} else {
-				rows = append(rows, table.Row{fmt.Sprintf("     %s", line)})
-			}
-		}
+		rows = append(rows, table.Row{fmt.Sprintf("[%2d] %s", i, step)})
 	}
 	return rows
 }
@@ -1084,7 +1073,7 @@ func showCachedLayersForImage(database *db.DB, imageRef string) error {
 		if len(buildSteps) > 0 {
 			buildStepsRows := buildBuildStepsRows(buildSteps)
 			builder.AddReadOnlyPage("Build Steps", BuildStepsColumns(), buildStepsRows)
-			builder.WithHelpText("↑/↓: navigate | Tab/←/→: build steps | Enter: browse | Esc: back")
+			builder.WithHelpText("↑/↓: navigate | Tab/←/→: switch page | Enter: browse/view | Esc: back")
 		} else {
 			builder.WithHelpText("↑/↓: navigate | Enter: browse | Esc: back")
 		}
