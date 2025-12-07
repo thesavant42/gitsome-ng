@@ -154,6 +154,14 @@ func main() {
 					continue // Return to main TUI after search
 				}
 
+				// If user wants to browse a specific Docker Hub repository
+				if result.LaunchBrowseDockerRepo {
+					if err := ui.RunBrowseDockerHubRepo(log.Default(), database); err != nil {
+						ui.PrintError(fmt.Sprintf("Browse Docker Hub repo failed: %v", err))
+					}
+					continue // Return to main TUI after browsing
+				}
+
 				// If user wants to browse cached layers
 				if result.LaunchCachedLayers {
 					if err := ui.RunCachedLayersBrowser(database); err != nil {

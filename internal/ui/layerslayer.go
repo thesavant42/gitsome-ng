@@ -7,18 +7,64 @@ package ui
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/paginator"
 	bubbleSpinner "github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh/spinner"
 	"github.com/thesavant42/gitsome-ng/internal/api"
 	"github.com/thesavant42/gitsome-ng/internal/db"
 )
+
+// =============================================================================
+// Helper Functions
+// =============================================================================
+
+// sanitizeBuildStep normalizes whitespace in build steps to prevent layout issues.
+// Replaces tabs and multiple consecutive spaces with a single space.
+var multiSpaceRegex = regexp.MustCompile(`[\t ]+`)
+
+func sanitizeBuildStep(step string) string {
+	// Replace tabs and multiple spaces with single space
+	result := multiSpaceRegex.ReplaceAllString(step, " ")
+	// Trim leading/trailing whitespace
+	return strings.TrimSpace(result)
+}
+
+// wrapBuildStep wraps a build step to fit within width
+func wrapBuildStep(text string, width int) string {
+	if width <= 0 || len(text) <= width {
+		return text
+	}
+	var result strings.Builder
+	remaining := text
+	for len(remaining) > 0 {
+		if len(remaining) <= width {
+			result.WriteString(remaining)
+			break
+		}
+		// Find break point
+		breakPoint := width
+		for i := width; i > width/2; i-- {
+			c := remaining[i-1]
+			if c == ' ' || c == '/' || c == '-' || c == '_' {
+				breakPoint = i
+				break
+			}
+		}
+		result.WriteString(remaining[:breakPoint])
+		result.WriteString("\n")
+		remaining = remaining[breakPoint:]
+	}
+	return result.String()
+}
 
 // =============================================================================
 // Filesystem Tree Structure
@@ -122,7 +168,7 @@ func renderTableWithFullWidthSelection(t table.Model, layout Layout) string {
 		}
 
 		// Data rows start at line 2, so dataRowIndex = i - 2
-		dataRowIndex := i - 3
+		dataRowIndex := i - 2
 
 		// Apply full-width selection styling to the selected row
 		// The table component handles scrolling internally, so we just need to match
@@ -466,6 +512,12 @@ type layerSelectorModel struct {
 	inputText  string
 	quitting   bool
 	layout     Layout
+
+	// Pagination state - 0 = Layers, 1 = Build Steps
+	currentPage   int
+	buildViewport viewport.Model // viewport for scrollable build steps
+	viewportReady bool
+	paginator     paginator.Model // visual page indicator (dots)
 }
 
 func newLayerSelectorModel(imageRef string, layers []api.Layer, buildSteps []string) layerSelectorModel {
@@ -521,13 +573,48 @@ func newLayerSelectorModel(imageRef string, layers []api.Layer, buildSteps []str
 	// Ensure cursor starts at the top (first row) for proper viewport positioning
 	t.GotoTop()
 
+	// Create viewport for build steps - use full width
+	vp := viewport.New(layout.InnerWidth, layout.TableHeight)
+
+	// Build the content for the viewport - sanitize and wrap build steps
+	var buildContent strings.Builder
+	wrapWidth := layout.InnerWidth - 6 // Leave room for "[xx] " prefix
+	for i, step := range buildSteps {
+		displayStep := sanitizeBuildStep(step)
+		wrapped := wrapBuildStep(displayStep, wrapWidth)
+		lines := strings.Split(wrapped, "\n")
+		for j, line := range lines {
+			if j == 0 {
+				buildContent.WriteString(fmt.Sprintf("[%d] %s\n", i, line))
+			} else {
+				buildContent.WriteString(fmt.Sprintf("    %s\n", line))
+			}
+		}
+	}
+	vp.SetContent(buildContent.String())
+
+	// Create paginator for page indicator (dots)
+	// Only show if there are build steps (2 pages: Layers, Build Steps)
+	p := paginator.New()
+	p.Type = paginator.Dots
+	p.PerPage = 1
+	if len(buildSteps) > 0 {
+		p.SetTotalPages(2)
+	} else {
+		p.SetTotalPages(1)
+	}
+
 	return layerSelectorModel{
-		table:      t,
-		imageRef:   imageRef,
-		layers:     layers,
-		buildSteps: buildSteps,
-		inputMode:  false,
-		layout:     layout,
+		table:         t,
+		imageRef:      imageRef,
+		layers:        layers,
+		buildSteps:    buildSteps,
+		inputMode:     false,
+		layout:        layout,
+		currentPage:   0, // Start on Layers page
+		buildViewport: vp,
+		viewportReady: true,
+		paginator:     p,
 	}
 }
 
@@ -564,9 +651,13 @@ func (m layerSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.layout = NewLayout(msg.Width, msg.Height)
 		m.updateTableSize()
+		// Update viewport dimensions for build steps
+		m.buildViewport.Width = m.layout.InnerWidth
+		m.buildViewport.Height = m.layout.TableHeight
 		return m, nil
 
 	case tea.KeyMsg:
+		// Handle input mode (custom layer selection)
 		if m.inputMode {
 			switch msg.String() {
 			case "esc":
@@ -597,6 +688,47 @@ func (m layerSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		// Handle page switching with left/right arrows
+		switch msg.String() {
+		case "left", "h":
+			if m.currentPage > 0 {
+				m.currentPage--
+				m.paginator.PrevPage()
+				m.buildViewport.GotoTop() // Reset viewport when switching pages
+			}
+			return m, nil
+		case "right", "l":
+			// Only allow switching to build steps page if there are build steps
+			if len(m.buildSteps) > 0 && m.currentPage < 1 {
+				m.currentPage++
+				m.paginator.NextPage()
+			}
+			return m, nil
+		case "tab":
+			// Toggle between pages
+			if len(m.buildSteps) > 0 {
+				m.currentPage = (m.currentPage + 1) % 2
+				m.paginator.Page = m.currentPage
+				m.buildViewport.GotoTop()
+			}
+			return m, nil
+		}
+
+		// Handle page-specific keys
+		if m.currentPage == 1 {
+			// Build Steps page - delegate to viewport for scrolling
+			switch msg.String() {
+			case "q", "esc":
+				m.quitting = true
+				return m, tea.Quit
+			}
+			// Let viewport handle all other keys (up/down/pgup/pgdn/home/end)
+			var cmd tea.Cmd
+			m.buildViewport, cmd = m.buildViewport.Update(msg)
+			return m, cmd
+		}
+
+		// Layers page - handle layer selection
 		switch msg.String() {
 		case "q", "esc":
 			m.quitting = true
@@ -620,10 +752,14 @@ func (m layerSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Let the table handle navigation (up/down/pgup/pgdown/home/end)
-	var cmd tea.Cmd
-	m.table, cmd = m.table.Update(msg)
-	return m, cmd
+	// Let the table handle navigation (up/down/pgup/pgdown/home/end) on Layers page
+	if m.currentPage == 0 {
+		var cmd tea.Cmd
+		m.table, cmd = m.table.Update(msg)
+		return m, cmd
+	}
+
+	return m, nil
 }
 
 func (m layerSelectorModel) View() string {
@@ -635,52 +771,63 @@ func (m layerSelectorModel) View() string {
 
 	// Title
 	contentBuilder.WriteString(TitleStyle.Render(fmt.Sprintf("Layer Inspector: %s", m.imageRef)))
+	contentBuilder.WriteString("\n")
+
+	// Page indicator using bubbles paginator (dots)
+	if len(m.buildSteps) > 0 {
+		// Show page labels with paginator dots
+		pageLabel := "Layers"
+		if m.currentPage == 1 {
+			pageLabel = "Build Steps"
+		}
+		paginatorLine := fmt.Sprintf("  %s  %s  (←/→ to switch)", pageLabel, m.paginator.View())
+		contentBuilder.WriteString(HintStyle.Render(paginatorLine))
+	}
+	contentBuilder.WriteString("\n")
+	contentBuilder.WriteString(strings.Repeat("─", m.layout.InnerWidth))
 	contentBuilder.WriteString("\n\n")
 
-	// Build steps section (if available) - show summary with proper height limit
-	if len(m.buildSteps) > 0 {
-		contentBuilder.WriteString(NormalStyle.Bold(true).Render("Build Steps:"))
-		contentBuilder.WriteString(fmt.Sprintf(" (%d steps)\n", len(m.buildSteps)))
+	if m.currentPage == 0 {
+		// === LAYERS PAGE ===
+		contentBuilder.WriteString(NormalStyle.Bold(true).Render("Layers:"))
+		contentBuilder.WriteString(fmt.Sprintf(" (%d available)\n\n", len(m.layers)))
 
-		// Limit build steps display to avoid overflowing the view
-		// Calculate max steps based on available height (reserve space for layers section)
-		maxSteps := 4
-		if len(m.buildSteps) < maxSteps {
-			maxSteps = len(m.buildSteps)
+		// Input mode display OR table
+		if m.inputMode {
+			contentBuilder.WriteString(NormalStyle.Render("Enter layer indices (comma-separated): "))
+			contentBuilder.WriteString(m.inputText)
+			contentBuilder.WriteString("_")
+			contentBuilder.WriteString("\n")
+		} else {
+			// Table view with full-width selection
+			contentBuilder.WriteString(renderTableWithFullWidthSelection(m.table, m.layout))
 		}
-		// Use InnerWidth - 6 for content to leave margin for index prefix
-		maxLineWidth := m.layout.InnerWidth - 6
-		if maxLineWidth < 30 {
-			maxLineWidth = 30
-		}
-		for i := 0; i < maxSteps; i++ {
-			displayStep := m.buildSteps[i]
-			if len(displayStep) > maxLineWidth {
-				displayStep = displayStep[:maxLineWidth-3] + "..."
-			}
-			// Use NormalStyle (white text) instead of DimStyle
-			contentBuilder.WriteString(fmt.Sprintf(" [%d] %s\n", i, NormalStyle.Render(displayStep)))
-		}
-		if len(m.buildSteps) > maxSteps {
-			// Use NormalStyle (white text) instead of DimStyle
-			contentBuilder.WriteString(NormalStyle.Render(fmt.Sprintf(" ... and %d more steps\n", len(m.buildSteps)-maxSteps)))
-		}
-		contentBuilder.WriteString("\n")
-	}
-
-	// Layers section
-	contentBuilder.WriteString(NormalStyle.Bold(true).Render("Layers:"))
-	contentBuilder.WriteString(fmt.Sprintf(" (%d available)\n\n", len(m.layers)))
-
-	// Input mode display OR table
-	if m.inputMode {
-		contentBuilder.WriteString(NormalStyle.Render("Enter layer indices (comma-separated): "))
-		contentBuilder.WriteString(m.inputText)
-		contentBuilder.WriteString("_")
-		contentBuilder.WriteString("\n")
 	} else {
-		// Table view with full-width selection
-		contentBuilder.WriteString(renderTableWithFullWidthSelection(m.table, m.layout))
+		// === BUILD STEPS PAGE ===
+		contentBuilder.WriteString(NormalStyle.Bold(true).Render("Build Steps:"))
+		contentBuilder.WriteString(fmt.Sprintf(" (%d steps)\n\n", len(m.buildSteps)))
+
+		// Render build steps with full-width styling (similar to table)
+		// Get the viewport content lines and apply full-width styling
+		vpContent := m.buildViewport.View()
+		vpLines := strings.Split(vpContent, "\n")
+
+		for _, line := range vpLines {
+			// Pad each line to full width for consistent appearance
+			// Use StringWidth for proper visible character count
+			lineLen := StringWidth(line)
+			displayLine := line
+			if lineLen < m.layout.InnerWidth {
+				displayLine += strings.Repeat(" ", m.layout.InnerWidth-lineLen)
+			}
+			contentBuilder.WriteString(NormalStyle.Render(displayLine))
+			contentBuilder.WriteString("\n")
+		}
+
+		// Show scroll position indicator
+		scrollPercent := m.buildViewport.ScrollPercent() * 100
+		scrollInfo := fmt.Sprintf("%.0f%% (↑/↓ scroll, PgUp/PgDn page)", scrollPercent)
+		contentBuilder.WriteString(HintStyle.Render(scrollInfo))
 	}
 
 	// Calculate available height for border
@@ -701,12 +848,20 @@ func (m layerSelectorModel) View() string {
 	result.WriteString(borderedContent)
 	result.WriteString("\n")
 
-	// Help text
+	// Help text based on current page and mode
+	var helpText string
 	if m.inputMode {
-		result.WriteString(" " + HintStyle.Render("Enter: confirm | Esc: cancel"))
+		helpText = "Enter: confirm | Esc: cancel"
+	} else if m.currentPage == 0 {
+		if len(m.buildSteps) > 0 {
+			helpText = "↑/↓: navigate | Enter: select | c: custom | ←/→: switch tab | q/Esc: back"
+		} else {
+			helpText = "↑/↓: navigate | Enter: select | c: custom | q/Esc: back"
+		}
 	} else {
-		result.WriteString(" " + HintStyle.Render("↑/↓: navigate | Enter: select | c: custom | q/Esc: back"))
+		helpText = "↑/↓: scroll | PgUp/PgDn: page | ←/→: switch tab | q/Esc: back"
 	}
+	result.WriteString(" " + HintStyle.Render(helpText))
 
 	return result.String()
 }
@@ -1459,11 +1614,26 @@ func newTagSelectorModel(imageName string, tags []string) tagSelectorModel {
 		{Title: "Tag", Width: colWidth},
 	}
 
+	// Calculate table height for tag selector's specific layout:
+	// Content before table: title(1) + newline(1) + divider(1) + newline(1) + tagCount(1) + doubleNewline(2) = 7
+	// Box overhead: main box borders(2) + footer box(3) + spacing(1) = 6
+	// Table render margin (bubbles/table header chrome): 4
+	const (
+		contentBeforeTable   = 7
+		boxOverhead          = 6
+		tagTableRenderMargin = 4
+		minTagTableHeight    = 5
+	)
+	tableHeight := layout.ViewportHeight - contentBeforeTable - boxOverhead + tagTableRenderMargin
+	if tableHeight < minTagTableHeight {
+		tableHeight = minTagTableHeight
+	}
+
 	t := table.New(
 		table.WithColumns(columns),
 		table.WithRows(rows),
 		table.WithFocused(true),
-		table.WithHeight(layout.TableHeight),
+		table.WithHeight(tableHeight),
 	)
 
 	// Apply styles matching the app pattern
@@ -1519,7 +1689,18 @@ func (m *tagSelectorModel) updateTableSize() {
 		{Title: "Tag", Width: colWidth},
 	}
 	m.table.SetColumns(columns)
-	m.table.SetHeight(m.layout.TableHeight)
+
+	const (
+		contentBeforeTable   = 7
+		boxOverhead          = 6
+		tagTableRenderMargin = 4
+		minTagTableHeight    = 5
+	)
+	tableHeight := m.layout.ViewportHeight - contentBeforeTable - boxOverhead + tagTableRenderMargin
+	if tableHeight < minTagTableHeight {
+		tableHeight = minTagTableHeight
+	}
+	m.table.SetHeight(tableHeight)
 }
 
 func (m tagSelectorModel) View() string {
@@ -1532,30 +1713,63 @@ func (m tagSelectorModel) View() string {
 	// Title
 	contentBuilder.WriteString(TitleStyle.Render(fmt.Sprintf("Select tag for %s", m.imageName)))
 	contentBuilder.WriteString("\n")
+	// White divider after title
+	contentBuilder.WriteString(strings.Repeat("─", m.layout.InnerWidth))
+	contentBuilder.WriteString("\n")
 	contentBuilder.WriteString(NormalStyle.Render(fmt.Sprintf("%d tags available", len(m.tags))))
 	contentBuilder.WriteString("\n\n")
 
 	// Table with full-width selection
 	contentBuilder.WriteString(renderTableWithFullWidthSelection(m.table, m.layout))
 
-	// Calculate available height for border
-	// Account for: 1 top margin + 2 border lines + 1 line after border + 1 hint line = 5 lines overhead
-	availableHeight := m.layout.ViewportHeight - 5
-	if availableHeight < 10 {
-		availableHeight = 10
+	// Get the content string
+	content := contentBuilder.String()
+
+	// Calculate available height for main content box
+	// Subtract: footer box (3 lines: 1 content + 2 border) + spacing (1 line) + border overhead (2 lines)
+	mainAvailableHeight := m.layout.ViewportHeight - 6
+	if mainAvailableHeight < 10 {
+		mainAvailableHeight = 10
 	}
 
-	// Border around content
-	borderedContent := BorderStyle.
-		Width(m.layout.InnerWidth).
-		Height(availableHeight).
-		Render(contentBuilder.String())
+	// Pad content to fill available height
+	contentLines := strings.Count(content, "\n")
+	if contentLines < mainAvailableHeight {
+		content += strings.Repeat("\n", mainAvailableHeight-contentLines)
+	}
 
+	// Build result with two-box layout
 	var result strings.Builder
-	result.WriteString("\n") // Top margin
-	result.WriteString(borderedContent)
-	result.WriteString("\n")
-	result.WriteString(" " + HintStyle.Render("↑/↓: navigate | Enter: select | q/Esc: back"))
+
+	// First box: Main content (red border)
+	mainBordered := BorderStyle.
+		Width(m.layout.InnerWidth).
+		Height(mainAvailableHeight).
+		Render(content)
+	result.WriteString(mainBordered)
+	result.WriteString("\n") // Spacing between boxes
+
+	// Second box: Help text (white border, 1 row high)
+	helpText := "↑/↓: navigate | Enter: select | q/Esc: back"
+	textWidth := len(helpText)
+	padding := (m.layout.InnerWidth - textWidth) / 2
+	var footerContent strings.Builder
+	if padding > 0 {
+		footerContent.WriteString(strings.Repeat(" ", padding))
+	}
+	footerContent.WriteString(HintStyle.Render(helpText))
+	// Fill remaining space
+	remaining := m.layout.InnerWidth - padding - textWidth
+	if remaining > 0 {
+		footerContent.WriteString(strings.Repeat(" ", remaining))
+	}
+
+	// Apply white border to footer
+	footerBordered := NewBorderStyleWithColor(colorWhite).
+		Width(m.layout.InnerWidth).
+		Height(1).
+		Render(footerContent.String())
+	result.WriteString(footerBordered)
 
 	return result.String()
 }

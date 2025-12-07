@@ -57,12 +57,13 @@ var menuOptions = []string{
 	"---  GitHub",
 	"  [V]iew cached GitHub Repositories Commit Metadata",
 	"  [A]dd Repository to Metadatabase",
-	"  [Q]uery Tagged GitHub DUsers",
+	"  [Q]uery Tagged GitHub DPUsers",
 	"  Keyword [s]earch",
 	"",
 	"",
 	"---  Docker Hub",
 	"  [D]ocker Hub Search",
+	"  Browse DockerHub [R]epository",
 	"  [B]rowse Cached Docker Layers",
 	"  [S]earch Cached Layers",
 	"",
@@ -185,6 +186,7 @@ type TUIModel struct {
 	// Docker Hub search state
 	launchDockerSearch       bool   // true when user wants to launch Docker Hub search
 	launchDockerSearchQuery  string // username to pre-fill in Docker Hub search
+	launchBrowseDockerRepo   bool   // true when user wants to browse a specific Docker Hub repo
 	launchCachedLayers       bool   // true when user wants to browse cached layers
 	launchSearchCachedLayers bool   // true when user wants to search cached layers
 	launchWayback            bool   // true when user wants to launch Wayback Machine browser
@@ -1473,28 +1475,33 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.quitting = true
 		m.launchDockerSearch = true
 		return m, tea.Quit
-	case "B":
+	case "R":
 		m.menuCursor = 10
+		m.quitting = true
+		m.launchBrowseDockerRepo = true
+		return m, tea.Quit
+	case "B":
+		m.menuCursor = 11
 		m.quitting = true
 		m.launchCachedLayers = true
 		return m, tea.Quit
 	case "S": // uppercase - Search Cached Layers
-		m.menuCursor = 11
+		m.menuCursor = 12
 		m.quitting = true
 		m.launchSearchCachedLayers = true
 		return m, tea.Quit
 	case "W":
-		m.menuCursor = 15
+		m.menuCursor = 16
 		m.quitting = true
 		m.launchWayback = true
 		return m, tea.Quit
 	case "w": // lowercase - Browse Wayback Cache
-		m.menuCursor = 16
+		m.menuCursor = 17
 		m.quitting = true
 		m.launchWaybackCache = true
 		return m, tea.Quit
 	case "E":
-		m.menuCursor = 21
+		m.menuCursor = 22
 		m.menuVisible = false
 		filename, err := ExportTabToMarkdown(m.stats, m.repoOwner, m.repoName, m.totalCommits, m.showCombined)
 		if err != nil {
@@ -1504,7 +1511,7 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "e": // lowercase - Export Database Backup
-		m.menuCursor = 22
+		m.menuCursor = 23
 		m.menuVisible = false
 		if m.dbPath != "" {
 			filename, err := ExportDatabaseBackup(m.dbPath)
@@ -1518,7 +1525,7 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "X":
-		m.menuCursor = 23
+		m.menuCursor = 24
 		m.menuVisible = false
 		if m.database != nil {
 			filename, err := ExportProjectReport(m.database, m.dbPath)
@@ -1598,29 +1605,33 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			m.launchDockerSearch = true
 			return m, tea.Quit
-		case 10: // [B]rowse Cached Layers
+		case 10: // Browse DockerHub [R]epository
+			m.quitting = true
+			m.launchBrowseDockerRepo = true
+			return m, tea.Quit
+		case 11: // [B]rowse Cached Layers
 			m.quitting = true
 			m.launchCachedLayers = true
 			return m, tea.Quit
-		case 11: // [S]earch Cached Layers
+		case 12: // [S]earch Cached Layers
 			m.quitting = true
 			m.launchSearchCachedLayers = true
 			return m, tea.Quit
-		case 15: // Search [W]ayback Machine
+		case 16: // Search [W]ayback Machine
 			m.quitting = true
 			m.launchWayback = true
 			return m, tea.Quit
-		case 16: // Browse [w]ayback Cache
+		case 17: // Browse [w]ayback Cache
 			m.quitting = true
 			m.launchWaybackCache = true
 			return m, tea.Quit
-		case 20: // [C]onfigure Highlight Domains
+		case 21: // [C]onfigure Highlight Domains
 			m.menuVisible = false
 			m.domainConfigVisible = true
 			m.domainCursor = 0
 			m.domainInput = ""
 			m.domainInputActive = false
-		case 21: // [E]xport Tab to Markdown
+		case 22: // [E]xport Tab to Markdown
 			m.menuVisible = false
 			filename, err := ExportTabToMarkdown(m.stats, m.repoOwner, m.repoName, m.totalCommits, m.showCombined)
 			if err != nil {
@@ -1628,7 +1639,7 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.exportMessage = fmt.Sprintf("Exported to %s", filename)
 			}
-		case 22: // [e]xport Database Backup
+		case 23: // [e]xport Database Backup
 			m.menuVisible = false
 			if m.dbPath != "" {
 				filename, err := ExportDatabaseBackup(m.dbPath)
@@ -1640,7 +1651,7 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.exportMessage = "Database path not available"
 			}
-		case 23: // e[X]port Project Report
+		case 24: // e[X]port Project Report
 			m.menuVisible = false
 			if m.database != nil {
 				filename, err := ExportProjectReport(m.database, m.dbPath)
@@ -4163,6 +4174,7 @@ func RunMultiRepoTUI(
 		return TUIResult{
 			SwitchProject:            m.switchProject,
 			LaunchDockerSearch:       m.launchDockerSearch,
+			LaunchBrowseDockerRepo:   m.launchBrowseDockerRepo,
 			LaunchCachedLayers:       m.launchCachedLayers,
 			LaunchSearchCachedLayers: m.launchSearchCachedLayers,
 			LaunchWayback:            m.launchWayback,
@@ -4177,6 +4189,7 @@ func RunMultiRepoTUI(
 type TUIResult struct {
 	SwitchProject            bool
 	LaunchDockerSearch       bool
+	LaunchBrowseDockerRepo   bool
 	LaunchCachedLayers       bool
 	LaunchSearchCachedLayers bool
 	LaunchWayback            bool

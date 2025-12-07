@@ -322,8 +322,8 @@ func (m DockerHubSearchModel) View() string {
 			// Use predefined style instead of creating new one
 			contentBuilder.WriteString(StatusMsgStyle.Render(fmt.Sprintf(" Error: %v", m.err)))
 		} else {
-			// Render table directly (no custom styling - let bubbles handle it)
-			contentBuilder.WriteString(m.table.View())
+			// Render table with full-width selection highlight
+			contentBuilder.WriteString(renderTableWithFullWidthSelection(m.table, m.layout))
 		}
 	}
 
@@ -630,4 +630,267 @@ func RunDockerHubSearch(logger *log.Logger, database *db.DB, initialQuery string
 
 		return nil
 	}
+}
+
+// PromptForDockerHubPath prompts the user to enter a Docker Hub repository path
+func PromptForDockerHubPath() (string, error) {
+	ti := textinput.New()
+	ti.Placeholder = "user/container (e.g., nginx, library/alpine, myuser/myapp)"
+	ti.Focus()
+	ti.CharLimit = 100
+	ti.Width = 60
+
+	model := dockerPathInputModel{
+		textInput: ti,
+	}
+
+	p := tea.NewProgram(model, tea.WithAltScreen())
+	finalModel, err := p.Run()
+	if err != nil {
+		return "", fmt.Errorf("prompt error: %w", err)
+	}
+
+	result := finalModel.(dockerPathInputModel)
+	if result.cancelled {
+		return "", fmt.Errorf("cancelled")
+	}
+
+	return result.value, nil
+}
+
+// dockerPathInputModel is a simple text input model for Docker Hub path
+type dockerPathInputModel struct {
+	textInput textinput.Model
+	value     string
+	cancelled bool
+	quitting  bool
+	layout    Layout
+}
+
+func (m dockerPathInputModel) Init() tea.Cmd {
+	return tea.Batch(textinput.Blink, tea.WindowSize())
+}
+
+func (m dockerPathInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.layout = NewLayout(msg.Width, msg.Height)
+		m.textInput.Width = m.layout.InnerWidth - 20
+		return m, nil
+
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "enter":
+			val := strings.TrimSpace(m.textInput.Value())
+			if val != "" {
+				m.value = val
+				m.quitting = true
+				return m, tea.Quit
+			}
+		case "esc", "ctrl+c":
+			m.cancelled = true
+			m.quitting = true
+			return m, tea.Quit
+		}
+	}
+
+	var cmd tea.Cmd
+	m.textInput, cmd = m.textInput.Update(msg)
+	return m, cmd
+}
+
+func (m dockerPathInputModel) View() string {
+	if m.quitting {
+		return ""
+	}
+
+	var contentBuilder strings.Builder
+	contentBuilder.WriteString(TitleStyle.Render("Browse DockerHub Repository"))
+	contentBuilder.WriteString("\n")
+	contentBuilder.WriteString(strings.Repeat("─", m.layout.InnerWidth))
+	contentBuilder.WriteString("\n\n")
+	contentBuilder.WriteString(" Enter Docker Hub path: ")
+	contentBuilder.WriteString(m.textInput.View())
+	contentBuilder.WriteString("\n\n")
+	contentBuilder.WriteString(HintStyle.Render(" Examples: nginx, library/alpine, myuser/myapp"))
+
+	content := contentBuilder.String()
+
+	// Calculate available height
+	mainAvailableHeight := m.layout.ViewportHeight - 6
+	if mainAvailableHeight < 10 {
+		mainAvailableHeight = 10
+	}
+
+	// Pad content
+	contentLines := strings.Count(content, "\n")
+	if contentLines < mainAvailableHeight {
+		content += strings.Repeat("\n", mainAvailableHeight-contentLines)
+	}
+
+	var result strings.Builder
+	mainBordered := BorderStyle.
+		Width(m.layout.InnerWidth).
+		Height(mainAvailableHeight).
+		Render(content)
+	result.WriteString(mainBordered)
+	result.WriteString("\n")
+
+	// Footer
+	helpText := "Enter: confirm | Esc: cancel"
+	textWidth := len(helpText)
+	padding := (m.layout.InnerWidth - textWidth) / 2
+	var footerContent strings.Builder
+	if padding > 0 {
+		footerContent.WriteString(strings.Repeat(" ", padding))
+	}
+	footerContent.WriteString(HintStyle.Render(helpText))
+	remaining := m.layout.InnerWidth - padding - textWidth
+	if remaining > 0 {
+		footerContent.WriteString(strings.Repeat(" ", remaining))
+	}
+
+	footerBordered := NewBorderStyleWithColor(colorWhite).
+		Width(m.layout.InnerWidth).
+		Height(1).
+		Render(footerContent.String())
+	result.WriteString(footerBordered)
+
+	return result.String()
+}
+
+// RunBrowseDockerHubRepo prompts for a Docker Hub path and launches the layer inspector
+// If the repository doesn't exist or has no tags, displays a 404 error
+func RunBrowseDockerHubRepo(logger *log.Logger, database *db.DB) error {
+	// Prompt for the Docker Hub path
+	path, err := PromptForDockerHubPath()
+	if err != nil {
+		if strings.Contains(err.Error(), "cancelled") {
+			return nil // User cancelled, return to menu
+		}
+		return err
+	}
+
+	// Normalize path - if no slash, treat as official image (library/name)
+	imageName := path
+	if !strings.Contains(path, "/") {
+		imageName = "library/" + path
+	}
+
+	// Try to fetch tags to validate the repository exists
+	client := api.NewRegistryClient()
+	tags, err := client.ListTags(imageName)
+
+	if err != nil || len(tags) == 0 {
+		// Repository not found or has no tags - show 404 error
+		show404Error(imageName)
+		return nil
+	}
+
+	// Repository exists - proceed with tag selection and inspection
+	tag, err := PromptForTag(imageName)
+	if err != nil {
+		if strings.Contains(err.Error(), "cancelled") || strings.Contains(err.Error(), "no tag selected") {
+			return nil
+		}
+		return err
+	}
+
+	imageRef := imageName + ":" + tag
+
+	// Run the layer inspector
+	if err := RunLayerInspectorWithDB(imageRef, database); err != nil {
+		PrintError(fmt.Sprintf("Layer inspector error: %v", err))
+	}
+
+	return nil
+}
+
+// show404Error displays a 404 error message for a Docker Hub repository
+func show404Error(imageName string) {
+	model := error404Model{imageName: imageName}
+	p := tea.NewProgram(model, tea.WithAltScreen())
+	p.Run()
+}
+
+// error404Model is a simple model to display a 404 error
+type error404Model struct {
+	imageName string
+	layout    Layout
+	quitting  bool
+}
+
+func (m error404Model) Init() tea.Cmd {
+	return tea.WindowSize()
+}
+
+func (m error404Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.layout = NewLayout(msg.Width, msg.Height)
+		return m, nil
+
+	case tea.KeyMsg:
+		m.quitting = true
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+func (m error404Model) View() string {
+	if m.quitting {
+		return ""
+	}
+
+	var contentBuilder strings.Builder
+	contentBuilder.WriteString(TitleStyle.Render("DockerHub Repository Not Found"))
+	contentBuilder.WriteString("\n")
+	contentBuilder.WriteString(strings.Repeat("─", m.layout.InnerWidth))
+	contentBuilder.WriteString("\n\n")
+	contentBuilder.WriteString(StatusMsgStyle.Render(fmt.Sprintf("  404 - Repository '%s' not found", m.imageName)))
+	contentBuilder.WriteString("\n\n")
+	contentBuilder.WriteString(HintStyle.Render("  The repository may not exist, may be private, or has no available tags."))
+	contentBuilder.WriteString("\n\n")
+	contentBuilder.WriteString(HintStyle.Render("  Please verify the path and try again."))
+
+	content := contentBuilder.String()
+
+	mainAvailableHeight := m.layout.ViewportHeight - 6
+	if mainAvailableHeight < 10 {
+		mainAvailableHeight = 10
+	}
+
+	contentLines := strings.Count(content, "\n")
+	if contentLines < mainAvailableHeight {
+		content += strings.Repeat("\n", mainAvailableHeight-contentLines)
+	}
+
+	var result strings.Builder
+	mainBordered := BorderStyle.
+		Width(m.layout.InnerWidth).
+		Height(mainAvailableHeight).
+		Render(content)
+	result.WriteString(mainBordered)
+	result.WriteString("\n")
+
+	helpText := "Press any key to return"
+	textWidth := len(helpText)
+	padding := (m.layout.InnerWidth - textWidth) / 2
+	var footerContent strings.Builder
+	if padding > 0 {
+		footerContent.WriteString(strings.Repeat(" ", padding))
+	}
+	footerContent.WriteString(HintStyle.Render(helpText))
+	remaining := m.layout.InnerWidth - padding - textWidth
+	if remaining > 0 {
+		footerContent.WriteString(strings.Repeat(" ", remaining))
+	}
+
+	footerBordered := NewBorderStyleWithColor(colorWhite).
+		Width(m.layout.InnerWidth).
+		Height(1).
+		Render(footerContent.String())
+	result.WriteString(footerBordered)
+
+	return result.String()
 }

@@ -397,6 +397,10 @@ func NewLayout(terminalWidth, terminalHeight int) Layout {
 
 		minTableHeight = 5 // minimum table height
 		borderWidth    = 2 // left + right border
+
+		// bubbles/table SetHeight includes header chrome (header row + BorderBottom line + divider)
+		// plus adjustment for data row display
+		tableRenderMargin = 4
 	)
 
 	width := terminalWidth
@@ -404,9 +408,8 @@ func NewLayout(terminalWidth, terminalHeight int) Layout {
 		width = MinViewportWidth
 	}
 
-	// TableHeight = terminal - main borders - content before table - spacing - footer box
-	// Add 3 additional lines to fill the gap
-	tableHeight := terminalHeight - mainBoxBorders - contentBeforeTable - boxSpacing - footerBoxHeight + 3
+	// TableHeight = terminal - main borders - content before table - spacing - footer box + table render margin
+	tableHeight := terminalHeight - mainBoxBorders - contentBeforeTable - boxSpacing - footerBoxHeight + tableRenderMargin
 	if tableHeight < minTableHeight {
 		tableHeight = minTableHeight
 	}
