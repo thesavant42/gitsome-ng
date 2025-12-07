@@ -447,8 +447,16 @@ const (
 	// MainBoxBorderOverhead + FooterBoxTotalHeight + BoxSpacing = 6
 	TwoBoxOverhead = MainBoxBorderOverhead + FooterBoxTotalHeight + BoxSpacing
 
+	// TabbedTableExtraLines is additional content lines in tabbed tables
+	// Title (1) + Tab line (1) + Divider (1) + Spacing (2) = 5
+	// This is the overhead BEFORE the table, not including table's own header
+	TabbedTableExtraLines = 5
+
 	// MinMainContentHeight is the minimum height for main content area.
 	MinMainContentHeight = 10
+
+	// MinTableHeight is minimum rows for any table
+	MinTableHeight = 5
 )
 
 // MainContentHeight returns available height for main box content.
@@ -457,6 +465,16 @@ func (l Layout) MainContentHeight() int {
 	h := l.ViewportHeight - TwoBoxOverhead
 	if h < MinMainContentHeight {
 		return MinMainContentHeight
+	}
+	return h
+}
+
+// TabbedTableHeight returns table height adjusted for tabbed table chrome.
+// USE THIS for all tabbed table views.
+func (l Layout) TabbedTableHeight() int {
+	h := l.TableHeight - TabbedTableExtraLines
+	if h < MinTableHeight {
+		return MinTableHeight
 	}
 	return h
 }

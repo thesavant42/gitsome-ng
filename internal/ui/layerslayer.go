@@ -496,13 +496,15 @@ func wrapBuildStep(text string, width int) []string {
 }
 
 // buildBuildStepsRows creates table rows from build steps with proper wrapping.
+// Note: This uses a conservative default width. Ideally would take layout as parameter.
 func buildBuildStepsRows(buildSteps []string) []table.Row {
 	if len(buildSteps) == 0 {
 		return []table.Row{{"No build steps available"}}
 	}
 
-	// Estimate wrap width (will be recalculated on resize, but need initial value)
-	wrapWidth := 100 // Conservative default
+	// Use conservative wrap width - actual width will be set by column calculation
+	// This is just for initial row creation; table will wrap based on actual column width
+	wrapWidth := 200 // Wide default - let table column width control actual display
 
 	var rows []table.Row
 	for i, step := range buildSteps {
@@ -1044,109 +1046,7 @@ func CachedLayerDetailColumns() []ColumnSpec {
 	}
 }
 
-// layerTableModel is the Bubble Tea model for layer selection using a table
-// This model includes download functionality (d key) which requires custom handling.
-type layerTableModel struct {
-	table    table.Model
-	layers   []db.LayerInspection
-	imageRef string
-	selected int
-	quitting bool
-	layout   Layout
-}
-
-func (m *layerTableModel) updateTableSize() {
-	columns := CalculateColumns(CachedLayerDetailColumns(), m.layout.TableWidth)
-	m.table.SetColumns(columns)
-	m.table.SetHeight(m.layout.TableHeight)
-}
-
-func newLayerTableModel(imageRef string, layers []db.LayerInspection) layerTableModel {
-	layout := DefaultLayout()
-
-	// Build rows - highest layers first
-	rows := make([]table.Row, len(layers))
-	for i := len(layers) - 1; i >= 0; i-- {
-		layer := layers[i]
-		rows[len(layers)-1-i] = table.Row{
-			fmt.Sprintf("%d", layer.LayerIndex),
-			layer.LayerDigest[:12],
-			api.HumanReadableSize(layer.LayerSize),
-			fmt.Sprintf("%d", layer.EntryCount),
-		}
-	}
-
-	// Use InitTable for standard table setup
-	columns := CalculateColumns(CachedLayerDetailColumns(), layout.TableWidth)
-	t := InitTable(columns, rows, layout)
-
-	return layerTableModel{
-		table:    t,
-		layers:   layers,
-		imageRef: imageRef,
-		selected: -1,
-		layout:   layout,
-	}
-}
-
-func (m layerTableModel) Init() tea.Cmd {
-	return StandardInit()
-}
-
-func (m layerTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
-
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.layout = NewLayout(msg.Width, msg.Height)
-		m.updateTableSize()
-		return m, nil
-
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "q", "esc":
-			m.quitting = true
-			return m, tea.Quit
-		case "enter":
-			// Convert table row index back to layer index
-			cursor := m.table.Cursor()
-			m.selected = len(m.layers) - 1 - cursor
-			m.quitting = true
-			return m, tea.Quit
-		case "d":
-			// Download selected layer
-			cursor := m.table.Cursor()
-			layerIdx := len(m.layers) - 1 - cursor
-			if layerIdx >= 0 && layerIdx < len(m.layers) {
-				layer := m.layers[layerIdx]
-				go func() {
-					api.NewRegistryClient().DownloadLayerBlob(m.imageRef, layer.LayerDigest, layer.LayerSize)
-				}()
-			}
-			return m, nil
-		}
-	}
-
-	m.table, cmd = m.table.Update(msg)
-	return m, cmd
-}
-
-func (m layerTableModel) View() string {
-	if m.quitting {
-		return ""
-	}
-
-	var content strings.Builder
-
-	// Header with title
-	content.WriteString(ViewHeader(fmt.Sprintf("%s - Select Layer (%d cached)", m.imageRef, len(m.layers)), m.layout.InnerWidth))
-
-	// Table with full-width selection
-	content.WriteString(RenderTableWithSelection(m.table, m.layout))
-
-	// Use TwoBoxView for consistent layout
-	return TwoBoxView(content.String(), "Enter: browse | d: download | q/Esc: back", m.layout)
-}
+// DELETED: layerTableModel - replaced by TabbedTableView throughout
 
 func showCachedLayersForImage(database *db.DB, imageRef string) error {
 	layers, err := database.GetLayerInspectionsByImage(imageRef)
@@ -1159,22 +1059,51 @@ func showCachedLayersForImage(database *db.DB, imageRef string) error {
 		return nil
 	}
 
+	// Fetch build steps from database
+	buildSteps, _ := database.GetImageBuildSteps(imageRef)
+	// Ignore error - build steps are optional
+
 	for {
-		model := newLayerTableModel(imageRef, layers)
-		p := tea.NewProgram(model, tea.WithAltScreen())
-		finalModel, err := p.Run()
+		// Build layer rows (no header - table columns provide that)
+		layerRows := make([]table.Row, len(layers))
+		for i := len(layers) - 1; i >= 0; i-- {
+			layer := layers[i]
+			layerRows[len(layers)-1-i] = table.Row{
+				fmt.Sprintf("%d", layer.LayerIndex),
+				layer.LayerDigest[:12],
+				api.HumanReadableSize(layer.LayerSize),
+				fmt.Sprintf("%d", layer.EntryCount),
+			}
+		}
+
+		// Create tabbed table
+		builder := NewTabbedTable(fmt.Sprintf("Cached Layers: %s", imageRef))
+		builder.AddPage("Layers", CachedLayerDetailColumns(), layerRows)
+
+		// Add Build Steps page if available
+		if len(buildSteps) > 0 {
+			buildStepsRows := buildBuildStepsRows(buildSteps)
+			builder.AddReadOnlyPage("Build Steps", BuildStepsColumns(), buildStepsRows)
+			builder.WithHelpText("↑/↓: navigate | Tab/←/→: build steps | Enter: browse | q/Esc: back")
+		} else {
+			builder.WithHelpText("↑/↓: navigate | Enter: browse | q/Esc: back")
+		}
+
+		result, err := builder.Run()
 		if err != nil {
 			return fmt.Errorf("layer table error: %w", err)
 		}
 
-		m := finalModel.(layerTableModel)
-		if m.selected < 0 || m.selected >= len(layers) {
-			return nil // Back or invalid selection
+		if result.Cancelled || result.SelectedRow < 0 {
+			return nil // Back or invalid
 		}
 
-		layer := layers[m.selected]
-
-		// Parse contents
+		// Map selection back to layer (cursor 0 = topmost layer)
+		selectedIdx := len(layers) - 1 - result.SelectedRow
+		if selectedIdx < 0 || selectedIdx >= len(layers) {
+			return nil // Invalid selection
+		}
+		layer := layers[selectedIdx] // Parse contents
 		var entries []api.TarEntry
 		if layer.Contents != "" {
 			if err := json.Unmarshal([]byte(layer.Contents), &entries); err != nil {
@@ -1675,21 +1604,40 @@ func showBatchLayersForImage(database *db.DB, imageRef string, indices []int, ma
 		return nil
 	}
 
-	// Use the existing layer table browser in a loop
+	// Use tabbed table for layer selection
 	for {
-		model := newLayerTableModel(imageRef, layers)
-		p := tea.NewProgram(model, tea.WithAltScreen())
-		finalModel, err := p.Run()
+		// Build layer rows (no header - table columns provide that)
+		layerRows := make([]table.Row, len(layers))
+		for i := len(layers) - 1; i >= 0; i-- {
+			layer := layers[i]
+			layerRows[len(layers)-1-i] = table.Row{
+				fmt.Sprintf("%d", layer.LayerIndex),
+				layer.LayerDigest[:12],
+				api.HumanReadableSize(layer.LayerSize),
+				fmt.Sprintf("%d", layer.EntryCount),
+			}
+		}
+
+		// Create tabbed table
+		builder := NewTabbedTable(fmt.Sprintf("Batch Layers: %s", imageRef))
+		builder.AddPage("Layers", CachedLayerDetailColumns(), layerRows)
+		builder.WithHelpText("↑/↓: navigate | Enter: browse | q/Esc: back")
+
+		result, err := builder.Run()
 		if err != nil {
 			return fmt.Errorf("layer table error: %w", err)
 		}
 
-		m := finalModel.(layerTableModel)
-		if m.selected < 0 || m.selected >= len(layers) {
-			return nil // Back or invalid selection
+		if result.Cancelled || result.SelectedRow < 0 {
+			return nil // Back or invalid
 		}
 
-		layer := layers[m.selected]
+		// Map selection back to layer (cursor 0 = topmost layer)
+		selectedIdx := len(layers) - 1 - result.SelectedRow
+		if selectedIdx < 0 || selectedIdx >= len(layers) {
+			return nil // Invalid selection
+		}
+		layer := layers[selectedIdx]
 
 		// Parse contents
 		var entries []api.TarEntry

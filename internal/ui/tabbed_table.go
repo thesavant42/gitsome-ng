@@ -99,7 +99,7 @@ func NewTabbedTableModel(cfg TabbedTableConfig) TabbedTableModel {
 			table.WithColumns(columns),
 			table.WithRows(page.Rows),
 			table.WithFocused(i == 0), // Only first page is focused initially
-			table.WithHeight(layout.TableHeight),
+			table.WithHeight(layout.TabbedTableHeight()),
 		)
 		ApplyTableStyles(&t)
 		t.GotoTop()
@@ -240,11 +240,9 @@ func (m *TabbedTableModel) updateAllTableSizes() {
 	for i, page := range m.config.Pages {
 		columns := CalculateColumns(page.Columns, m.layout.TableWidth)
 		m.tables[i].SetColumns(columns)
-		m.tables[i].SetHeight(m.layout.TableHeight)
+		m.tables[i].SetHeight(m.layout.TabbedTableHeight())
 	}
-}
-
-// =============================================================================
+} // =============================================================================
 // View Rendering
 // =============================================================================
 
@@ -275,19 +273,11 @@ func (m TabbedTableModel) View() string {
 		content.WriteString("\n\n")
 	}
 
-	// Current page info
-	currentPage := m.config.Pages[m.currentPage]
-	pageInfo := fmt.Sprintf("%d items", len(currentPage.Rows))
-	if currentPage.ReadOnly {
-		pageInfo += " (read-only)"
-	}
-	content.WriteString(RenderNormal(pageInfo))
-	content.WriteString("\n\n")
-
 	// Table with full-width selection
 	content.WriteString(RenderTableWithSelection(m.tables[m.currentPage], m.layout))
 
 	// Get help text (page-specific or default)
+	currentPage := m.config.Pages[m.currentPage]
 	helpText := currentPage.HelpText
 	if helpText == "" {
 		helpText = m.config.HelpText
