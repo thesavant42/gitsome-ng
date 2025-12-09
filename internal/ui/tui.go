@@ -804,6 +804,9 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.progressPercent = 0.0
 		m.progressLabel = ""
 
+		// Return to repo view after fetch completes
+		m.repoViewVisible = true
+
 		// Log API call to database
 		if m.database != nil {
 			endpoint := fmt.Sprintf("/repos/%s/%s/commits", msg.owner, msg.name)
@@ -974,6 +977,7 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(cmd, m.startFetch(repo.Owner, repo.Name))
 			case "n", "N", "esc":
 				m.fetchPromptRepo = nil
+				m.repoViewVisible = true
 				return m, nil
 			}
 			return m, nil
@@ -1855,6 +1859,7 @@ func (m TUIModel) handleAddRepoInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.addRepoInputActive = false
 		m.addRepoVisible = false
 		m.addRepoInput = ""
+		m.repoViewVisible = true
 		return m, nil
 
 	case "enter":
@@ -1882,11 +1887,23 @@ func (m TUIModel) handleAddRepoInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					// Check if repo has cached commits
 					hasCached, _ := m.database.HasCachedCommits(owner, name)
 					if !hasCached && m.token != "" {
-						// Show fetch prompt
+						// Show fetch prompt (repoViewVisible stays false until fetch completes or is skipped)
 						m.fetchPromptRepo = &newRepo
+					} else {
+						// No fetch needed, return to repo view
+						m.repoViewVisible = true
 					}
+				} else {
+					// Invalid input, return to repo view
+					m.repoViewVisible = true
 				}
+			} else {
+				// Invalid format, return to repo view
+				m.repoViewVisible = true
 			}
+		} else {
+			// Empty input, return to repo view
+			m.repoViewVisible = true
 		}
 		m.addRepoInputActive = false
 		m.addRepoVisible = false
