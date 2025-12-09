@@ -806,6 +806,7 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Return to repo view after fetch completes
 		m.repoViewVisible = true
+		m.menuVisible = false
 
 		// Log API call to database
 		if m.database != nil {
@@ -978,6 +979,7 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "n", "N", "esc":
 				m.fetchPromptRepo = nil
 				m.repoViewVisible = true
+				m.menuVisible = false
 				return m, nil
 			}
 			return m, nil
@@ -1035,7 +1037,7 @@ func (m TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "m", "M":
 			m.menuVisible = true
-			m.menuCursor = 0
+			m.menuCursor = 2 // First selectable item (View Repositories)
 			return m, nil
 
 		case "s", "S":
@@ -1860,6 +1862,7 @@ func (m TUIModel) handleAddRepoInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.addRepoVisible = false
 		m.addRepoInput = ""
 		m.repoViewVisible = true
+		m.menuVisible = false
 		return m, nil
 
 	case "enter":
@@ -1892,18 +1895,22 @@ func (m TUIModel) handleAddRepoInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					} else {
 						// No fetch needed, return to repo view
 						m.repoViewVisible = true
+						m.menuVisible = false
 					}
 				} else {
 					// Invalid input, return to repo view
 					m.repoViewVisible = true
+					m.menuVisible = false
 				}
 			} else {
 				// Invalid format, return to repo view
 				m.repoViewVisible = true
+				m.menuVisible = false
 			}
 		} else {
 			// Empty input, return to repo view
 			m.repoViewVisible = true
+			m.menuVisible = false
 		}
 		m.addRepoInputActive = false
 		m.addRepoVisible = false
@@ -3053,9 +3060,6 @@ func (m TUIModel) View() string {
 func (m TUIModel) renderRepoView() string {
 	var b strings.Builder
 
-	// Add top margin to avoid terminal edge
-	b.WriteString("\n")
-
 	// Build content inside border: tabs + table + stats
 	var contentBuilder strings.Builder
 
@@ -3071,51 +3075,41 @@ func (m TUIModel) renderRepoView() string {
 	contentBuilder.WriteString(tableView)
 	contentBuilder.WriteString("\n")
 
-	// Add white divider line before footer rows
+	// Add white divider line before stats row
 	dividerLine := strings.Repeat("─", m.layout.InnerWidth)
 	contentBuilder.WriteString(dividerLine)
 	contentBuilder.WriteString("\n")
 
-	// Add two permanent footer rows INSIDE the border
+	// Stats row INSIDE the border (white text, plain)
 	currentRow := m.table.Cursor() + 1
 	totalRows := len(m.stats)
-
-	// Row 1: Combined position tracking and stats (white text, plain)
-	row1Text := fmt.Sprintf("Row %d/%d Total Commits/Committers: %d/%d", currentRow, totalRows, m.totalCommits, len(m.stats))
-	row1Padded := row1Text + strings.Repeat(" ", m.layout.InnerWidth-len(row1Text))
-	contentBuilder.WriteString(row1Padded)
-	contentBuilder.WriteString("\n")
-
-	// Row 2: Hotkeys and help (yellow text)
-	hotkeyLabels := "(M)enu, (T)ag/Untag, Query (U)sers, (L)ink/(U)nlink Rows, e(X)port Report"
-	if len(m.pendingLinks) > 0 {
-		hotkeyLabels += fmt.Sprintf(" [SELECTING: %d rows]", len(m.pendingLinks))
-	}
-	helpHint := "Press ? for help"
-	if m.cached {
-		helpHint += " | CACHED"
-	}
+	statsText := fmt.Sprintf("Row %d/%d Total Commits/Committers: %d/%d", currentRow, totalRows, m.totalCommits, len(m.stats))
 	if m.exportMessage != "" {
-		helpHint = m.exportMessage
+		statsText += " | " + m.exportMessage
 	}
-	row2Text := hotkeyLabels + " " + helpHint
-	// Apply yellow styling to the entire row
-	row2Styled := HintStyle.Render(row2Text)
-	contentBuilder.WriteString(row2Styled)
+	contentBuilder.WriteString(statsText)
 
-	// Calculate available height for border
-	// Subtract: top margin (1 line) + border overhead (2 lines) + 1 for safety
-	availableHeight := m.layout.ViewportHeight - 4
-	if availableHeight < 15 {
-		availableHeight = 15
+	// Calculate available height for main content box
+	// Use TwoBoxOverhead which accounts for: main borders (2) + footer box (3) + spacing (1) = 6
+	mainAvailableHeight := m.layout.ViewportHeight - TwoBoxOverhead
+	if mainAvailableHeight < MinMainContentHeight {
+		mainAvailableHeight = MinMainContentHeight
 	}
 
-	// Border around content - dynamic width and height to fill viewport
-	borderedContent := BorderStyle.
-		Width(m.layout.InnerWidth).
-		Height(availableHeight).
-		Render(contentBuilder.String())
+	// Pad content to fill available height
+	paddedContent := PadContentToHeight(contentBuilder.String(), mainAvailableHeight)
+
+	// First box: Main content (red border)
+	borderedContent := RenderBorder(paddedContent, m.layout.InnerWidth, mainAvailableHeight)
 	b.WriteString(borderedContent)
+	b.WriteString("\n")
+
+	// Second box: Help text footer (white border, yellow text)
+	helpText := "(T)ag | (U)sers Query | (E)xport Tab | (A)dd/(R)em Repo | ?: help"
+	if len(m.pendingLinks) > 0 {
+		helpText = fmt.Sprintf("[SELECTING: %d rows] %s", len(m.pendingLinks), helpText)
+	}
+	b.WriteString(RenderCenteredFooter(helpText, m.layout.InnerWidth))
 
 	// Only show detailed help outside border when help is visible
 	if m.helpVisible {
@@ -3716,7 +3710,7 @@ func (m TUIModel) renderMenu() string {
 	result.WriteString("\n") // Spacing between boxes
 
 	// Second box: Help text (1 row high) - anchored at bottom
-	helpText := "[V]iew [C]onfig [A]dd [Q]uery [s]earch [D]ocker [B]rowse [S]earch [W]ayback [w]ayback [E]xport [e]xport e[X]port | Esc: back | Ctrl+C: quit"
+	helpText := "[V]iew [C]onfig [A]dd [Q]uery [s]earch [D]ocker [B]rowse [S]earch [W]ayback [w]ayback [E]xport [e]xport e[X]port | Esc: back"
 	textWidth := len(helpText)
 	padding := (m.layout.InnerWidth - textWidth) / 2
 	var footerContent strings.Builder
@@ -3965,7 +3959,8 @@ func (m TUIModel) renderTableWithLinks() string {
 	cursor := m.table.Cursor()
 
 	// Calculate visible cursor index based on table scrolling
-	height := m.layout.TableHeight
+	// Use m.table.Height() to get actual table height (matches RenderTableWithSelection pattern)
+	height := m.table.Height()
 	totalRows := len(m.stats)
 	start := 0
 	if cursor >= height {
@@ -4128,6 +4123,7 @@ func RunMultiRepoTUI(
 	model.switchToCombined()      // Load combined stats
 	model.repoViewVisible = false // Start at menu (home), not repo view
 	model.menuVisible = true      // Enable menu input handling at startup
+	model.menuCursor = 2          // First selectable item (View Repositories)
 
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
