@@ -215,9 +215,10 @@ func (m SubdomonsterModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.statusMsg = fmt.Sprintf("Found %d subdomains (%d new) via %s", len(msg.subdomains), inserted, msg.source)
 
 				// Mark domain as enumerated
-				if msg.source == "virustotal" {
+				switch msg.source {
+				case "virustotal":
 					m.database.MarkVTEnumerated(m.domain)
-				} else if msg.source == "crtsh" {
+				case "crtsh":
 					m.database.MarkCrtshEnumerated(m.domain)
 				}
 			}
@@ -793,9 +794,10 @@ func (m SubdomonsterModel) renderTableView() string {
 		if m.filterSource != "" {
 			queryInfo += fmt.Sprintf(" src=%s", m.filterSource)
 		}
-		if m.filterCDX == 0 {
+		switch m.filterCDX {
+		case 0:
 			queryInfo += " CDX=no"
-		} else if m.filterCDX == 1 {
+		case 1:
 			queryInfo += " CDX=yes"
 		}
 	}

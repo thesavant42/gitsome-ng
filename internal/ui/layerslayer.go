@@ -463,38 +463,6 @@ func runLayerSelectorTabbedTUI(imageRef string, layers []api.Layer, buildSteps [
 	return fmt.Sprintf("%d", result.SelectedRow-1), nil
 }
 
-// wrapBuildStep wraps text to fit within a given width, returning multiple lines
-func wrapBuildStep(text string, width int) []string {
-	if width <= 0 || len(text) <= width {
-		return []string{text}
-	}
-
-	var lines []string
-	remaining := text
-
-	for len(remaining) > 0 {
-		if len(remaining) <= width {
-			lines = append(lines, remaining)
-			break
-		}
-
-		// Find a good break point
-		breakPoint := width
-		for i := width; i > width/2; i-- {
-			c := remaining[i-1]
-			if c == ' ' || c == '/' || c == '-' || c == '=' || c == '&' {
-				breakPoint = i
-				break
-			}
-		}
-
-		lines = append(lines, remaining[:breakPoint])
-		remaining = remaining[breakPoint:]
-	}
-
-	return lines
-}
-
 // buildBuildStepsRows creates table rows from build steps with proper wrapping.
 // Note: This uses a conservative default width. Ideally would take layout as parameter.
 func buildBuildStepsRows(buildSteps []string) []table.Row {
