@@ -75,9 +75,12 @@ func RenderTableWithSelection(t table.Model, layout Layout) string {
 		// Strip ANSI codes first to prevent embedded reset codes from killing the background
 		if dataRowIndex == visibleCursorIndex {
 			cleanLine := stripANSI(line)
-			// Pad line to minimum width for selection highlight
+			// Pad line to exact width for selection highlight to ensure full-width selection
 			if StringWidth(cleanLine) < layout.InnerWidth {
 				cleanLine = cleanLine + strings.Repeat(" ", layout.InnerWidth-StringWidth(cleanLine))
+			} else if StringWidth(cleanLine) > layout.InnerWidth {
+				// Truncate if too long to prevent overflow
+				cleanLine = truncateToWidth(cleanLine, layout.InnerWidth)
 			}
 			result = append(result, SelectedStyle.Render(cleanLine))
 			continue

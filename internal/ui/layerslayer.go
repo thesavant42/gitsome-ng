@@ -339,6 +339,10 @@ func (m fsBrowserModel) View() string {
 		return ""
 	}
 
+	// Diagnostic logging for layout debugging
+	// fmt.Printf("DEBUG: Viewport: %dx%d, InnerWidth: %d, TableHeight: %d\n",
+	// 	 m.layout.ViewportWidth, m.layout.ViewportHeight, m.layout.InnerWidth, m.layout.TableHeight)
+
 	var b strings.Builder
 
 	// Add top margin to avoid terminal edge (matching main TUI)
@@ -387,8 +391,26 @@ func (m fsBrowserModel) View() string {
 	b.WriteString(borderedContent)
 	b.WriteString("\n")
 
-	// Help footer below border
-	b.WriteString(" " + HintStyle.Render("enter: open | backspace: up | d: download | esc: back"))
+	// Help footer below border - use proper centering and width calculation
+	helpText := "enter: open | backspace: up | d: download | esc: back"
+	textWidth := len(helpText)
+	padding := (m.layout.InnerWidth - textWidth) / 2
+	var footerContent strings.Builder
+	if padding > 0 {
+		footerContent.WriteString(strings.Repeat(" ", padding))
+	}
+	footerContent.WriteString(HintStyle.Render(helpText))
+	// Fill remaining space
+	remaining := m.layout.InnerWidth - padding - textWidth
+	if remaining > 0 {
+		footerContent.WriteString(strings.Repeat(" ", remaining))
+	}
+	// Apply white border to footer
+	footerBordered := NewBorderStyleWithColor(colorWhite).
+		Width(m.layout.InnerWidth).
+		Height(1).
+		Render(footerContent.String())
+	b.WriteString(footerBordered)
 
 	return b.String()
 }

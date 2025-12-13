@@ -413,6 +413,11 @@ func NewLayout(terminalWidth, terminalHeight int) Layout {
 	if tableHeight < minTableHeight {
 		tableHeight = minTableHeight
 	}
+	// Ensure table height doesn't exceed available space after accounting for all overhead
+	maxAvailableHeight := terminalHeight - mainBoxBorders - boxSpacing - footerBoxHeight
+	if tableHeight > maxAvailableHeight {
+		tableHeight = maxAvailableHeight
+	}
 
 	return Layout{
 		ViewportWidth:  width,
