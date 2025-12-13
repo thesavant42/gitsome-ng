@@ -73,6 +73,11 @@ var menuOptions = []string{
 	"  Browse [w]ayback Cache",
 	"",
 	"",
+	"---  Subdomain Enumeration",
+	"  S[u]bDomonster - Subdomain Discovery",
+	"  Browse Cached S[U]bdomains",
+	"",
+	"",
 	"---  System",
 	"  [C]onfigure Highlight Domains",
 	"  [E]xport Tab to Markdown",
@@ -191,6 +196,8 @@ type TUIModel struct {
 	launchSearchCachedLayers bool   // true when user wants to search cached layers
 	launchWayback            bool   // true when user wants to launch Wayback Machine browser
 	launchWaybackCache       bool   // true when user wants to browse Wayback cache
+	launchSubdomonster       bool   // true when user wants to launch Subdomonster
+	launchSubdomonsterCache  bool   // true when user wants to browse cached subdomains
 
 	// Export state
 	dbPath        string // path to current database for backup export
@@ -1506,8 +1513,18 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.quitting = true
 		m.launchWaybackCache = true
 		return m, tea.Quit
-	case "E":
+	case "u": // SubDomonster - Subdomain Discovery
+		m.menuCursor = 21
+		m.quitting = true
+		m.launchSubdomonster = true
+		return m, tea.Quit
+	case "U": // Browse Cached Subdomains
 		m.menuCursor = 22
+		m.quitting = true
+		m.launchSubdomonsterCache = true
+		return m, tea.Quit
+	case "E":
+		m.menuCursor = 26
 		m.menuVisible = false
 		filename, err := ExportTabToMarkdown(m.stats, m.repoOwner, m.repoName, m.totalCommits, m.showCombined)
 		if err != nil {
@@ -1631,13 +1648,21 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			m.launchWaybackCache = true
 			return m, tea.Quit
-		case 21: // [C]onfigure Highlight Domains
+		case 21: // S[u]bDomonster - Subdomain Discovery
+			m.quitting = true
+			m.launchSubdomonster = true
+			return m, tea.Quit
+		case 22: // Browse Cached S[U]bdomains
+			m.quitting = true
+			m.launchSubdomonsterCache = true
+			return m, tea.Quit
+		case 26: // [C]onfigure Highlight Domains
 			m.menuVisible = false
 			m.domainConfigVisible = true
 			m.domainCursor = 0
 			m.domainInput = ""
 			m.domainInputActive = false
-		case 22: // [E]xport Tab to Markdown
+		case 27: // [E]xport Tab to Markdown
 			m.menuVisible = false
 			filename, err := ExportTabToMarkdown(m.stats, m.repoOwner, m.repoName, m.totalCommits, m.showCombined)
 			if err != nil {
@@ -1645,7 +1670,7 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.exportMessage = fmt.Sprintf("Exported to %s", filename)
 			}
-		case 23: // [e]xport Database Backup
+		case 28: // [e]xport Database Backup
 			m.menuVisible = false
 			if m.dbPath != "" {
 				filename, err := ExportDatabaseBackup(m.dbPath)
@@ -1657,7 +1682,7 @@ func (m TUIModel) handleMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.exportMessage = "Database path not available"
 			}
-		case 24: // e[X]port Project Report
+		case 29: // e[X]port Project Report
 			m.menuVisible = false
 			if m.database != nil {
 				filename, err := ExportProjectReport(m.database, m.dbPath)
@@ -4142,6 +4167,8 @@ func RunMultiRepoTUI(
 			LaunchSearchCachedLayers: m.launchSearchCachedLayers,
 			LaunchWayback:            m.launchWayback,
 			LaunchWaybackCache:       m.launchWaybackCache,
+			LaunchSubdomonster:       m.launchSubdomonster,
+			LaunchSubdomonsterCache:  m.launchSubdomonsterCache,
 			DockerSearchQuery:        m.launchDockerSearchQuery,
 		}, nil
 	}
@@ -4157,6 +4184,8 @@ type TUIResult struct {
 	LaunchSearchCachedLayers bool
 	LaunchWayback            bool
 	LaunchWaybackCache       bool
+	LaunchSubdomonster       bool
+	LaunchSubdomonsterCache  bool
 	DockerSearchQuery        string // pre-filled query for Docker Hub search
 }
 

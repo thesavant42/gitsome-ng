@@ -194,6 +194,22 @@ func main() {
 					continue // Return to main TUI after browsing
 				}
 
+				// If user wants to launch SubDomonster
+				if result.LaunchSubdomonster {
+					if err := ui.RunSubdomonster(log.Default(), database); err != nil {
+						ui.PrintError(fmt.Sprintf("SubDomonster failed: %v", err))
+					}
+					continue // Return to main TUI after browsing
+				}
+
+				// If user wants to browse cached subdomains
+				if result.LaunchSubdomonsterCache {
+					if err := ui.RunSubdomonsterCache(log.Default(), database); err != nil {
+						ui.PrintError(fmt.Sprintf("SubDomonster cache browser failed: %v", err))
+					}
+					continue // Return to main TUI after browsing
+				}
+
 				// If user wants to switch projects, close current db and show selector
 				if result.SwitchProject {
 					database.Close()

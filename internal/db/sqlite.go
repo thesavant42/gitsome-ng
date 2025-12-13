@@ -124,6 +124,22 @@ func New(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("failed to create wayback fetch state schema: %w", err)
 	}
 
+	// Initialize subdomain tables (Subdomonster feature)
+	if _, err := conn.Exec(createTargetDomainsTable); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to create target domains schema: %w", err)
+	}
+	if _, err := conn.Exec(createSubdomainsTable); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to create subdomains schema: %w", err)
+	}
+
+	// Initialize app settings table
+	if _, err := conn.Exec(createSettingsTable); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to create settings schema: %w", err)
+	}
+
 	// Run migrations to add new columns to existing tables
 	// These will silently fail if columns already exist
 	migrations := []string{

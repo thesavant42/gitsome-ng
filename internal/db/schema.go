@@ -692,3 +692,182 @@ WHERE domain = ?
 const deleteWaybackFetchState = `
 DELETE FROM wayback_fetch_state WHERE domain = ?
 `
+
+// =============================================================================
+// Subdomonster: Subdomain Discovery Tables
+// =============================================================================
+
+// Schema for target domains to enumerate
+const createTargetDomainsTable = `
+CREATE TABLE IF NOT EXISTS target_domains (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    domain TEXT UNIQUE NOT NULL,
+    vt_enumerated BOOLEAN DEFAULT FALSE,
+    crtsh_enumerated BOOLEAN DEFAULT FALSE,
+    added_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_target_domains_domain ON target_domains(domain);
+`
+
+// Schema for discovered subdomains
+const createSubdomainsTable = `
+CREATE TABLE IF NOT EXISTS subdomains (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    domain TEXT NOT NULL,
+    subdomain TEXT UNIQUE NOT NULL,
+    source TEXT NOT NULL,
+    cnames TEXT,
+    alt_names TEXT,
+    cert_expired BOOLEAN DEFAULT FALSE,
+    cdx_indexed BOOLEAN DEFAULT FALSE,
+    discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(domain) REFERENCES target_domains(domain) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_subdomains_domain ON subdomains(domain);
+CREATE INDEX IF NOT EXISTS idx_subdomains_cdx ON subdomains(cdx_indexed);
+CREATE INDEX IF NOT EXISTS idx_subdomains_source ON subdomains(source);
+`
+
+// SQL queries for target domains
+const insertTargetDomain = `
+INSERT OR IGNORE INTO target_domains (domain) VALUES (?)
+`
+
+const selectTargetDomains = `
+SELECT id, domain, vt_enumerated, crtsh_enumerated, added_at
+FROM target_domains
+ORDER BY added_at DESC
+`
+
+const selectTargetDomain = `
+SELECT id, domain, vt_enumerated, crtsh_enumerated, added_at
+FROM target_domains
+WHERE domain = ?
+`
+
+const updateTargetDomainVTEnumerated = `
+UPDATE target_domains SET vt_enumerated = TRUE WHERE domain = ?
+`
+
+const updateTargetDomainCrtshEnumerated = `
+UPDATE target_domains SET crtsh_enumerated = TRUE WHERE domain = ?
+`
+
+const deleteTargetDomain = `
+DELETE FROM target_domains WHERE domain = ?
+`
+
+// SQL queries for subdomains
+const insertSubdomain = `
+INSERT OR IGNORE INTO subdomains (domain, subdomain, source, cnames, alt_names, cert_expired)
+VALUES (?, ?, ?, ?, ?, ?)
+`
+
+const updateSubdomainMerge = `
+UPDATE subdomains SET
+    cnames = CASE WHEN cnames IS NULL OR cnames = '' THEN ? ELSE cnames || ',' || ? END,
+    alt_names = CASE WHEN alt_names IS NULL OR alt_names = '' THEN ? ELSE alt_names || ',' || ? END,
+    cert_expired = CASE WHEN ? THEN TRUE ELSE cert_expired END
+WHERE subdomain = ?
+`
+
+const selectSubdomains = `
+SELECT id, domain, subdomain, source, cnames, alt_names, cert_expired, cdx_indexed, discovered_at
+FROM subdomains
+WHERE domain = ?
+ORDER BY subdomain ASC
+`
+
+const selectSubdomainsFiltered = `
+SELECT id, domain, subdomain, source, cnames, alt_names, cert_expired, cdx_indexed, discovered_at
+FROM subdomains
+WHERE domain = ?
+AND (? = '' OR subdomain LIKE ?)
+AND (? = '' OR source = ?)
+AND (? = -1 OR cdx_indexed = ?)
+ORDER BY subdomain ASC
+LIMIT ? OFFSET ?
+`
+
+const selectSubdomainCount = `
+SELECT COUNT(*) FROM subdomains WHERE domain = ?
+`
+
+const selectSubdomainCountFiltered = `
+SELECT COUNT(*) FROM subdomains
+WHERE domain = ?
+AND (? = '' OR subdomain LIKE ?)
+AND (? = '' OR source = ?)
+AND (? = -1 OR cdx_indexed = ?)
+`
+
+const selectSubdomainStats = `
+SELECT 
+    COUNT(*) as total,
+    SUM(CASE WHEN source = 'virustotal' THEN 1 ELSE 0 END) as vt_count,
+    SUM(CASE WHEN source = 'crtsh' THEN 1 ELSE 0 END) as crtsh_count,
+    SUM(CASE WHEN source = 'import' THEN 1 ELSE 0 END) as import_count,
+    SUM(CASE WHEN cdx_indexed THEN 1 ELSE 0 END) as cdx_count,
+    SUM(CASE WHEN cert_expired THEN 1 ELSE 0 END) as expired_count
+FROM subdomains
+WHERE domain = ?
+`
+
+const updateSubdomainCDXIndexed = `
+UPDATE subdomains SET cdx_indexed = TRUE WHERE subdomain = ?
+`
+
+const deleteSubdomain = `
+DELETE FROM subdomains WHERE id = ?
+`
+
+const deleteSubdomainsByDomain = `
+DELETE FROM subdomains WHERE domain = ?
+`
+
+const selectAllSubdomainsForDomain = `
+SELECT id, domain, subdomain, source, cnames, alt_names, cert_expired, cdx_indexed, discovered_at
+FROM subdomains
+WHERE domain = ?
+`
+
+// Get domains with subdomain counts for domain browser
+const selectTargetDomainsWithCounts = `
+SELECT 
+    t.id, t.domain, t.vt_enumerated, t.crtsh_enumerated, t.added_at,
+    COUNT(s.id) as subdomain_count
+FROM target_domains t
+LEFT JOIN subdomains s ON t.domain = s.domain
+GROUP BY t.id
+ORDER BY t.added_at DESC
+`
+
+// =============================================================================
+// Application Settings Table
+// =============================================================================
+
+const createSettingsTable = `
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+`
+
+const upsertSetting = `
+INSERT INTO app_settings (key, value, updated_at)
+VALUES (?, ?, CURRENT_TIMESTAMP)
+ON CONFLICT(key) DO UPDATE SET
+    value = excluded.value,
+    updated_at = CURRENT_TIMESTAMP
+`
+
+const selectSetting = `
+SELECT value FROM app_settings WHERE key = ?
+`
+
+const deleteSetting = `
+DELETE FROM app_settings WHERE key = ?
+`

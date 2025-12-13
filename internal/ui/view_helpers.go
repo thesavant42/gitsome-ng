@@ -37,16 +37,25 @@ func RenderTableWithSelection(t table.Model, layout Layout) string {
 	// Table height is the number of visible data rows (doesn't include header)
 	height := t.Height()
 	totalRows := len(t.Rows())
+
+	// Calculate scroll offset to match bubbles table internal viewport logic
+	// When totalRows <= height, no scrolling occurs (start = 0)
+	// When totalRows > height and cursor moves past visible area, viewport scrolls
 	start := 0
-	if cursor >= height {
-		start = cursor - height + 1
+	if totalRows > height {
+		// Scrolling is possible
+		if cursor >= height {
+			start = cursor - height + 1
+		}
+		// Clamp start to valid range: cannot scroll past the point where
+		// the last row is at the bottom of the viewport
+		maxStart := totalRows - height
+		if start > maxStart {
+			start = maxStart
+		}
 	}
-	if start > totalRows-height {
-		start = totalRows - height
-	}
-	if start < 0 {
-		start = 0
-	}
+	// start is always >= 0 at this point since we only modify it when totalRows > height
+
 	visibleCursorIndex := cursor - start
 
 	for i, line := range lines {
