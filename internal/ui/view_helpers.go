@@ -14,11 +14,11 @@ import (
 // =============================================================================
 
 // RenderTableWithSelection renders a bubbles table with full-width selection highlight.
-// The table's Selected style should use Background(lipgloss.NoColor{}) to prevent ANSI embedding,
+// The table's Selected style should use a neutral background,
 // and this function applies the visible selection styling.
 //
 // CRITICAL: Understanding bubbles/table View() output:
-// - Line 0: Header row (with visual bottom border via lipgloss BorderBottom, but NOT a separate line)
+// - Line 0: Header row (with visual bottom border, but NOT a separate line)
 // - Line 1+: Data rows (only visible rows due to viewport scrolling)
 // - There is NO separate divider line from bubbles - we add one manually for consistency
 //
@@ -72,9 +72,9 @@ func RenderTableWithSelection(t table.Model, layout Layout) string {
 		dataRowIndex := i - 1
 
 		// Apply selection styling to the visible cursor row
-		// Strip ANSI codes first to prevent embedded reset codes from killing the background
+		// Strip escape codes first to prevent embedded reset codes from killing the background
 		if dataRowIndex == visibleCursorIndex {
-			cleanLine := stripANSI(line)
+			cleanLine := stripEscapeCodes(line)
 			// Pad line to exact width for selection highlight to ensure full-width selection
 			if StringWidth(cleanLine) < layout.InnerWidth {
 				cleanLine = cleanLine + strings.Repeat(" ", layout.InnerWidth-StringWidth(cleanLine))

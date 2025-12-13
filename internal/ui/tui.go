@@ -3309,9 +3309,9 @@ func (m TUIModel) renderPageIndicator() string {
 	// Build final string: exactly InnerWidth chars
 	var b strings.Builder
 
-	// Left arrow - strip ANSI codes to get accurate width
+	// Left arrow - strip escape codes to get accurate width
 	leftArrow := ArrowStyle.Render("<")
-	leftArrowClean := stripANSI(leftArrow)
+	leftArrowClean := stripEscapeCodes(leftArrow)
 	if activeIdx > 0 {
 		b.WriteString(leftArrow)
 	} else {
@@ -3337,7 +3337,7 @@ func (m TUIModel) renderPageIndicator() string {
 	}
 	arrowWidth += 1 // Space after left arrow
 	if activeIdx < len(labels)-1 {
-		arrowWidth += len(stripANSI(ArrowStyle.Render(">"))) // Right arrow width
+		arrowWidth += len(stripEscapeCodes(ArrowStyle.Render(">"))) // Right arrow width
 	} else {
 		arrowWidth += 1 // Space instead of arrow
 	}
@@ -3959,13 +3959,10 @@ func extractEmailFromRow(line string) string {
 // renderTableWithLinks renders the table with colored rows for linked groups
 // STYLE GUIDE: All dividers and selectors use m.layout.InnerWidth for edge-to-edge rendering
 //
-// CORRECT LIPGLOSS USAGE: This function uses lipgloss ONLY for styling (applying colors).
 // The table structure comes from Bubbles (m.table.View()).
 // We then colorize individual rows based on their state (selected, linked, pending).
-// This is the CORRECT pattern: Bubbles for structure, lipgloss for styling.
-// See docs/LIPGLOSS_FORBIDDEN_PATTERNS.md - DO NOT use this as a template for building tables.
 func (m TUIModel) renderTableWithLinks() string {
-	// Get the base table view from Bubbles (structure comes from Bubbles, not lipgloss)
+	// Get the base table view from Bubbles
 	baseView := m.table.View()
 
 	// Build pending emails set for quick lookup (convert indices to emails)
@@ -4016,8 +4013,8 @@ func (m TUIModel) renderTableWithLinks() string {
 
 		// Selector bar - use InnerWidth for full width
 		if dataRowIndex == visibleCursorIndex {
-			// Strip ANSI codes first to prevent embedded reset codes from killing the background
-			cleanLine := stripANSI(line)
+			// Strip escape codes first to prevent embedded reset codes from killing the background
+			cleanLine := stripEscapeCodes(line)
 			// Apply style directly with correct width (like menu does)
 			styledLine := SelectedStyle.Width(m.layout.InnerWidth).Render(cleanLine)
 			result = append(result, styledLine)
@@ -4035,7 +4032,7 @@ func (m TUIModel) renderTableWithLinks() string {
 		// Check if pending (yellow background)
 		// Uses centralized helper function from styles.go
 		if pendingEmails[email] {
-			cleanLine := stripANSI(line)
+			cleanLine := stripEscapeCodes(line)
 			result = append(result, RenderPendingRow(cleanLine, m.layout.InnerWidth))
 			continue
 		}

@@ -1,7 +1,7 @@
 package docker
 
 // dockerFSbrowser.go - Filesystem browser for Docker layer contents
-// LIPGLOSS-FREE: Uses centralized styles from ui/styles.go
+// Uses centralized styles from ui/styles.go
 
 import (
 	"fmt"

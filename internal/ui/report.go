@@ -1,8 +1,6 @@
 package ui
 
-// LIPGLOSS-FREE: This file uses centralized styles from styles.go
-// All lipgloss usage has been moved to styles.go per the style guide.
-// DO NOT add lipgloss import here.
+// This file uses centralized styles from styles.go
 
 import (
 	"fmt"
@@ -26,10 +24,9 @@ func PrintHeader(owner, repo string, totalCommits int) {
 //
 // CORRECT STYLE USAGE: This is a CLI report (non-interactive), so we use manual
 // formatting with strings. Styles from styles.go are used ONLY for colors/styling the output text.
-// We DO NOT use lipgloss to build table structure - we use string formatting instead.
+// We use string formatting for table structure.
 //
 // For interactive TUI tables, use bubbles/table component (see internal/ui/tui.go).
-// See docs/LIPGLOSS_FORBIDDEN_PATTERNS.md for forbidden patterns.
 func PrintContributorTable(title string, stats []models.ContributorStats, highlight string) {
 	if len(stats) == 0 {
 		fmt.Println(ReportSubtitleStyle.Render(title + ": No data"))

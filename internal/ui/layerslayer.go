@@ -1,8 +1,6 @@
 package ui
 
-// LIPGLOSS-FREE: This file uses centralized styles from styles.go
-// All lipgloss usage has been moved to styles.go per the style guide.
-// DO NOT add lipgloss import here.
+// This file uses centralized styles from styles.go
 
 import (
 	"encoding/json"
@@ -1142,7 +1140,6 @@ func newSearchModel(database *db.DB) searchModel {
 	layout := DefaultLayout()
 
 	// Create empty list with default delegate styles
-	// Note: Charm bubbles components require lipgloss.Style, so we use their defaults
 	delegate := list.NewDefaultDelegate()
 
 	l := list.New([]list.Item{}, delegate, layout.InnerWidth-4, layout.TableHeight)
@@ -1150,7 +1147,6 @@ func newSearchModel(database *db.DB) searchModel {
 	l.SetShowStatusBar(true)
 	l.SetShowHelp(true)
 	l.SetFilteringEnabled(false) // We do our own search
-	// Use default list title style - Charm component requires lipgloss.Style
 
 	return searchModel{
 		database:  database,
@@ -1371,10 +1367,8 @@ type batchFetchCompleteMsg struct {
 
 func newBatchFetchModel(client *api.RegistryClient, imageRef string, indices []int, layers []api.Layer, database *db.DB) batchFetchModel {
 	// Create spinner with dots style
-	// Note: Charm bubbles spinner.Style requires lipgloss.Style, so we use default
 	s := bubbleSpinner.New()
 	s.Spinner = bubbleSpinner.Dot
-	// Use default spinner style - Charm component requires lipgloss.Style
 
 	return batchFetchModel{
 		imageRef:       imageRef,

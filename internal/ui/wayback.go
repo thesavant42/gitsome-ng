@@ -175,7 +175,6 @@ func NewWaybackModel(logger *log.Logger, database *db.DB) WaybackModel {
 	ti.Placeholder = "Enter domain (e.g., test.acme.ai)"
 	ti.Focus()
 	ti.CharLimit = 200
-	// Use default textinput styles - Charm component requires lipgloss.Style
 
 	layout := DefaultLayout()
 
@@ -193,7 +192,7 @@ func NewWaybackModel(logger *log.Logger, database *db.DB) WaybackModel {
 		progress.WithGradient("#FFFFFF", "#FF0000"), // White to red gradient (unscaled)
 		progress.WithColorProfile(termenv.TrueColor),
 	)
-	prog.EmptyColor = "241" // Gray for unfilled portion (ANSI 256)
+	prog.EmptyColor = "241" // Gray for unfilled portion
 
 	return WaybackModel{
 		client:       api.NewWaybackClient(nil), // Pass nil to silence logger during TUI

@@ -1,8 +1,7 @@
 package ui
 
-// PURE ANSI STYLING - NO LIPGLOSS
-// All styling uses ANSI escape codes directly.
 // This file provides the ONLY styling definitions for the entire UI.
+// All styling uses escape codes directly.
 
 import (
 	"fmt"
@@ -16,22 +15,22 @@ import (
 )
 
 // =============================================================================
-// ANSI Escape Code Constants
+// Escape Code Constants
 // =============================================================================
 
 const (
 	// Reset all attributes
-	ansiReset = "\033[0m"
+	codeReset = "\033[0m"
 
 	// Text attributes
-	ansiBold   = "\033[1m"
-	ansiItalic = "\033[3m"
+	codeBold   = "\033[1m"
+	codeItalic = "\033[3m"
 
 	// 256-color foreground: \033[38;5;{n}m
 	// 256-color background: \033[48;5;{n}m
 )
 
-// ANSI 256-color codes
+// 256-color codes
 const (
 	colorRed       = 196 // red (border, accent)
 	colorDarkRed   = 88  // dark red (highlight/selection background)
@@ -88,10 +87,10 @@ var LinkGroupColors = []int{
 }
 
 // =============================================================================
-// ANSI Styling Functions
+// Styling Functions
 // =============================================================================
 
-// fg returns ANSI foreground color escape sequence
+// fg returns foreground color escape sequence
 func fg(color int) string {
 	return fmt.Sprintf("\033[38;5;%dm", color)
 }
@@ -104,17 +103,17 @@ func bg(color int) string {
 // style applies foreground color and optional attributes to text
 func style(text string, fgColor int, bold bool) string {
 	if bold {
-		return fg(fgColor) + ansiBold + text + ansiReset
+		return fg(fgColor) + codeBold + text + codeReset
 	}
-	return fg(fgColor) + text + ansiReset
+	return fg(fgColor) + text + codeReset
 }
 
 // styleWithBg applies foreground, background colors and optional attributes
 func styleWithBg(text string, fgColor, bgColor int, bold bool) string {
 	if bold {
-		return fg(fgColor) + bg(bgColor) + ansiBold + text + ansiReset
+		return fg(fgColor) + bg(bgColor) + codeBold + text + codeReset
 	}
-	return fg(fgColor) + bg(bgColor) + text + ansiReset
+	return fg(fgColor) + bg(bgColor) + text + codeReset
 }
 
 // padRight pads a string to a specific width (for full-width styling)
@@ -352,8 +351,8 @@ func truncateToWidth(s string, width int) string {
 	}
 
 	// Add any trailing escape sequences (reset)
-	if strings.Contains(s, ansiReset) && !strings.HasSuffix(result.String(), ansiReset) {
-		result.WriteString(ansiReset)
+	if strings.Contains(s, codeReset) && !strings.HasSuffix(result.String(), codeReset) {
+		result.WriteString(codeReset)
 	}
 
 	return result.String()
@@ -538,7 +537,7 @@ func BuildTableColumns(widths ColumnWidths) []table.Column {
 }
 
 // =============================================================================
-// Table Styling (ANSI-based)
+// Table Styling
 // =============================================================================
 
 // ApplyTableStyles applies styling to a bubbles table
@@ -609,17 +608,17 @@ func NewAppTheme() *huh.Theme {
 
 // StringWidth calculates the visible width of a string
 func StringWidth(s string) int {
-	// Strip ANSI codes before measuring
-	cleaned := stripANSI(s)
+	// Strip escape codes before measuring
+	cleaned := stripEscapeCodes(s)
 	return runewidth.StringWidth(cleaned)
 }
 
-// ansiRegex matches ANSI escape sequences
-var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+// escapeCodeRegex matches terminal escape sequences
+var escapeCodeRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
-// stripANSI removes ANSI escape sequences from a string
-func stripANSI(s string) string {
-	return ansiRegex.ReplaceAllString(s, "")
+// stripEscapeCodes removes terminal escape sequences from a string
+func stripEscapeCodes(s string) string {
+	return escapeCodeRegex.ReplaceAllString(s, "")
 }
 
 // =============================================================================
@@ -743,7 +742,7 @@ var ReportHighlightStyle = styleRenderer{render: func(s string) string { return 
 var ReportSuccessStyle = styleRenderer{render: func(s string) string { return style(s, colorGreen, true) }}
 var ReportErrorStyle = styleRenderer{render: func(s string) string { return style(s, colorRed, true) }}
 var ReportProgressStyle = styleRenderer{render: func(s string) string { return style(s, colorYellow, false) }}
-var ReportSummaryStyle = styleRenderer{render: func(s string) string { return fg(colorCyan) + ansiItalic + s + ansiReset }}
+var ReportSummaryStyle = styleRenderer{render: func(s string) string { return fg(colorCyan) + codeItalic + s + codeReset }}
 
 // Row status styles
 var PendingRowStyle = styleRenderer{render: func(s string) string { return style(s, colorPending, false) }}
@@ -795,7 +794,7 @@ func (s styleRenderer) Bold(b bool) styleRenderer {
 				// The baseRender already adds color, we need to insert bold
 				rendered := baseRender(text)
 				// Insert bold after the first escape sequence
-				return ansiBold + rendered
+				return codeBold + rendered
 			},
 			width:    s.width,
 			boldFlag: true,
