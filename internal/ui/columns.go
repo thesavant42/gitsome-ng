@@ -123,6 +123,38 @@ func SingleColumnSpec(title string) []ColumnSpec {
 	}
 }
 
+// WaybackColumns returns column specs for the Wayback Machine CDX table.
+func WaybackColumns() []ColumnSpec {
+	return []ColumnSpec{
+		{Title: "URL", FlexRatio: 100, MinWidth: 30},
+		{Title: "Timestamp", FixedWidth: 20},
+		{Title: "Status", FixedWidth: 10},
+		{Title: "MIME Type", FixedWidth: 30},
+	}
+}
+
+// DockerHubColumns returns column specs for Docker Hub search results.
+func DockerHubColumns() []ColumnSpec {
+	return []ColumnSpec{
+		{Title: "Name", FlexRatio: 28, MinWidth: 20},
+		{Title: "Publisher", FlexRatio: 17, MinWidth: 12},
+		{Title: "Stars", FixedWidth: 6},
+		{Title: "Cached", FixedWidth: 8},
+		{Title: "Description", FlexRatio: 55, MinWidth: 20},
+	}
+}
+
+// SubdomonsterColumns returns column specs for subdomain enumeration table.
+func SubdomonsterColumns() []ColumnSpec {
+	return []ColumnSpec{
+		{Title: "Subdomain", FlexRatio: 40, MinWidth: 20},
+		{Title: "Source", FixedWidth: 12},
+		{Title: "CDX", FixedWidth: 6},
+		{Title: "First Seen", FlexRatio: 30, MinWidth: 20},
+		{Title: "Last Seen", FlexRatio: 30, MinWidth: 20},
+	}
+}
+
 // =============================================================================
 // Column Width Helpers
 // =============================================================================

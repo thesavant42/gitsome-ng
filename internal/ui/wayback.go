@@ -941,104 +941,46 @@ func (m WaybackModel) handleDomainsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // View implements tea.Model
 func (m WaybackModel) View() string {
-	// Layout constants
-	const (
-		footerBoxHeight       = 3  // 1 content line + 2 border lines
-		footerBoxContentLines = 1  // number of content lines in footer
-		boxSpacing            = 1  // spacing between main and footer boxes
-		mainBoxBorderOverhead = 2  // top and bottom border of main box
-		minMainBoxHeight      = 10 // minimum height for main content box
-	)
-
 	if m.quitting {
 		return ""
 	}
 
-	var contentBuilder strings.Builder
+	// Build content based on view mode
+	builder := NewPageView(m.layout).
+		Title("Wayback Machine CDX Browser").
+		Divider().
+		Spacing(2)
 
-	// Title
-	contentBuilder.WriteString(TitleStyle.Render("Wayback Machine CDX Browser"))
-	contentBuilder.WriteString("\n")
-	contentBuilder.WriteString(strings.Repeat("─", m.layout.InnerWidth))
-	contentBuilder.WriteString("\n\n")
-
+	var viewContent string
 	switch m.viewMode {
 	case waybackViewInput:
-		contentBuilder.WriteString(m.renderInputView())
+		viewContent = m.renderInputView()
 	case waybackViewFetching:
-		contentBuilder.WriteString(m.renderFetchingView())
-		// Include status message inside the main box during fetching
+		viewContent = m.renderFetchingView()
+		// Include status message during fetching
 		if m.statusMsg != "" {
-			contentBuilder.WriteString("\n")
-			contentBuilder.WriteString(NormalStyle.Render(" " + m.statusMsg))
+			viewContent += "\n" + NormalStyle.Render(" "+m.statusMsg)
 		}
 	case waybackViewTable:
-		contentBuilder.WriteString(m.renderTableView())
+		viewContent = m.renderTableView()
 	case waybackViewFilter:
-		contentBuilder.WriteString(m.renderFilterView())
+		viewContent = m.renderFilterView()
 	case waybackViewDomains:
-		contentBuilder.WriteString(m.renderDomainsView())
+		viewContent = m.renderDomainsView()
 	case waybackViewDetail:
-		contentBuilder.WriteString(m.renderDetailView())
+		viewContent = m.renderDetailView()
 	case waybackViewSettings:
-		contentBuilder.WriteString(m.renderSettingsView())
+		viewContent = m.renderSettingsView()
 	}
 
-	content := contentBuilder.String()
+	builder.CustomContent(viewContent)
 
-	// Calculate available height for main content box
-	mainAvailableHeight := m.layout.ViewportHeight - footerBoxHeight - boxSpacing - mainBoxBorderOverhead
-	if mainAvailableHeight < minMainBoxHeight {
-		mainAvailableHeight = minMainBoxHeight
-	}
-
-	// Pad content to fill available height
-	contentLines := strings.Count(content, "\n")
-	if contentLines < mainAvailableHeight {
-		content += strings.Repeat("\n", mainAvailableHeight-contentLines)
-	}
-
-	// Build result with two-box layout
-	var result strings.Builder
-
-	// Main content box (red border)
-	mainBordered := BorderStyle.
-		Width(m.layout.InnerWidth).
-		Height(mainAvailableHeight).
-		Render(content)
-	result.WriteString(mainBordered)
-	result.WriteString("\n")
-
-	// Error message (if any) - shown above footer box
+	// Add error if present
 	if m.err != nil {
-		result.WriteString(fmt.Sprintf(" Error: %v\n", m.err))
+		builder.Error(m.err)
 	}
 
-	// Footer box: Help text (white border)
-	helpText := m.getHelpTextPlain()
-	textWidth := len(helpText)
-	padding := (m.layout.InnerWidth - textWidth) / 2
-	if padding < 0 {
-		padding = 0
-	}
-
-	var footerContent strings.Builder
-	if padding > 0 {
-		footerContent.WriteString(strings.Repeat(" ", padding))
-	}
-	footerContent.WriteString(HintStyle.Render(helpText))
-	remaining := m.layout.InnerWidth - padding - textWidth
-	if remaining > 0 {
-		footerContent.WriteString(strings.Repeat(" ", remaining))
-	}
-
-	footerBordered := NewBorderStyleWithColor(colorWhite).
-		Width(m.layout.InnerWidth).
-		Height(footerBoxContentLines).
-		Render(footerContent.String())
-	result.WriteString(footerBordered)
-
-	return result.String()
+	return builder.Help(m.getHelpTextPlain()).Build()
 }
 
 func (m WaybackModel) renderInputView() string {
@@ -1138,9 +1080,7 @@ func (m WaybackModel) renderFetchingView() string {
 }
 
 func (m WaybackModel) renderTableView() string {
-	var b strings.Builder
-
-	// Query info
+	// Build query info
 	queryInfo := fmt.Sprintf(" Domain: %s", m.domain)
 	if m.filterText != "" || m.filterMimeType != "" || m.filterTag != "" {
 		queryInfo += "  |  Filters:"
@@ -1161,13 +1101,12 @@ func (m WaybackModel) renderTableView() string {
 	currentRow := m.table.Cursor() + 1
 	totalRows := len(m.filteredRecords)
 	queryInfo += fmt.Sprintf("  |  Page %d/%d  |  Total: %d  |  Row %d/%d", m.page, maxPage, m.totalRecords, currentRow, totalRows)
-	b.WriteString(AccentStyle.Render(queryInfo))
-	b.WriteString("\n")
 
-	// Table - use centralized helper for full-width selection
-	b.WriteString(RenderTableWithSelection(m.table, m.layout))
-
-	return b.String()
+	// Use PageViewBuilder for consistent rendering
+	return NewPageView(m.layout).
+		QueryInfo(queryInfo).
+		Table(m.table).
+		BuildContent()
 }
 
 func (m WaybackModel) renderFilterView() string {
@@ -1623,39 +1562,9 @@ func (m *WaybackModel) updateTable() {
 	m.table.SetCursor(oldCursor)
 }
 
-const (
-	waybackTimestampWidth = 20 // YYYY-MM-DD HH:MM:SS + spacing
-	waybackStatusWidth    = 10 // "Status" header + spacing
-	waybackMimeWidth      = 30 // "application/octet-stream" + spacing
-	waybackMinURLWidth    = 30
-	waybackMinTotalWidth  = 80
-)
-
+// calculateWaybackColumns uses the centralized CalculateColumns with WaybackColumns spec.
 func calculateWaybackColumns(totalW int) []table.Column {
-	if totalW < waybackMinTotalWidth {
-		totalW = waybackMinTotalWidth
-	}
-
-	fixedTotal := waybackTimestampWidth + waybackStatusWidth + waybackMimeWidth
-
-	// URL gets remaining space
-	urlW := totalW - fixedTotal
-	if urlW < waybackMinURLWidth {
-		urlW = waybackMinURLWidth
-	}
-
-	// Verify exact match
-	actualTotal := urlW + waybackTimestampWidth + waybackStatusWidth + waybackMimeWidth
-	if actualTotal != totalW {
-		urlW += (totalW - actualTotal)
-	}
-
-	return []table.Column{
-		{Title: "URL", Width: urlW},
-		{Title: "Timestamp", Width: waybackTimestampWidth},
-		{Title: "Status", Width: waybackStatusWidth},
-		{Title: "MIME Type", Width: waybackMimeWidth},
-	}
+	return CalculateColumns(WaybackColumns(), totalW)
 }
 
 // ShouldReturnToMain returns true if user wants to go back

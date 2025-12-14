@@ -308,12 +308,12 @@ func printSummary(result LintResult) {
 	fmt.Printf("%s\n", strings.Repeat("─", 60))
 
 	if result.ErrorCount > 0 {
-		fmt.Println("\n❌ TUI style check FAILED")
+		fmt.Println("\n[FAIL] TUI style check FAILED")
 		fmt.Println("\nRefer to docs/TUI_STYLE_GUIDE.md for correct patterns.")
 	} else if result.WarnCount > 0 {
-		fmt.Println("\n⚠️  TUI style check passed with warnings")
+		fmt.Println("\n[WARN] TUI style check passed with warnings")
 	} else {
-		fmt.Println("\n✅ TUI style check PASSED")
+		fmt.Println("\n[PASS] TUI style check PASSED")
 	}
 }
 

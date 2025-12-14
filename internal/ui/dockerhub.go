@@ -270,118 +270,60 @@ func (m DockerHubSearchModel) View() string {
 		return ""
 	}
 
-	// Build content inside border
-	var contentBuilder strings.Builder
-
-	// Title
-	contentBuilder.WriteString(TitleStyle.Render("Docker Hub Search"))
-	contentBuilder.WriteString("\n")
-	// White divider after title (use InnerWidth to fit within bordered content area)
-	contentBuilder.WriteString(strings.Repeat("─", m.layout.InnerWidth))
-	contentBuilder.WriteString("\n\n")
-
-	// Search input or current query
+	// Input mode - show search input
 	if m.inputMode {
-		contentBuilder.WriteString(" Search: ")
-		contentBuilder.WriteString(m.textInput.View())
+		return NewPageView(m.layout).
+			Title("Docker Hub Search").
+			Divider().
+			Spacing(2).
+			Text(" Search: " + m.textInput.View()).
+			Help("Enter: search | Esc: back to main").
+			Build()
+	}
+
+	// Table mode - build query info
+	queryInfo := fmt.Sprintf(" Query: %s", m.query)
+	if m.results != nil {
+		totalPages := (m.results.Total + 24) / 25 // 25 results per page, round up
+		queryInfo += fmt.Sprintf("  |  Page %d of %d  |  Total: %d results", m.page, totalPages, m.results.Total)
+	}
+
+	// Add filter status
+	filterLabel := ""
+	switch m.filterType {
+	case FilterAll:
+		filterLabel = "[All]"
+	case FilterImage:
+		filterLabel = "[Images]"
+	case FilterUser:
+		filterLabel = "[Users]"
+	case FilterModel:
+		filterLabel = "[Models]"
+	}
+	if m.filterType != FilterAll && m.results != nil {
+		queryInfo += fmt.Sprintf("  |  Filter: %s (%d shown)", filterLabel, len(m.filteredResults))
+	} else if m.filterType != FilterAll {
+		queryInfo += fmt.Sprintf("  |  Filter: %s", filterLabel)
+	}
+
+	// Build view with PageViewBuilder
+	builder := NewPageView(m.layout).
+		Title("Docker Hub Search").
+		Divider().
+		Spacing(2).
+		QueryInfo(queryInfo)
+
+	// Add content based on state
+	if m.searching {
+		builder.CustomContent(m.spinner.View() + " " + HintStyle.Render("Searching..."))
+	} else if m.err != nil {
+		builder.Error(m.err)
 	} else {
-		// Show current query, filter, and pagination
-		queryInfo := fmt.Sprintf(" Query: %s", m.query)
-		if m.results != nil {
-			totalPages := (m.results.Total + 24) / 25 // 25 results per page, round up
-			queryInfo += fmt.Sprintf("  |  Page %d of %d  |  Total: %d results", m.page, totalPages, m.results.Total)
-		}
-		// Show filter status
-		filterLabel := ""
-		switch m.filterType {
-		case FilterAll:
-			filterLabel = "[All]"
-		case FilterImage:
-			filterLabel = "[Images]"
-		case FilterUser:
-			filterLabel = "[Users]"
-		case FilterModel:
-			filterLabel = "[Models]"
-		}
-		if m.filterType != FilterAll && m.results != nil {
-			queryInfo += fmt.Sprintf("  |  Filter: %s (%d shown)", filterLabel, len(m.filteredResults))
-		} else if m.filterType != FilterAll {
-			queryInfo += fmt.Sprintf("  |  Filter: %s", filterLabel)
-		}
-		contentBuilder.WriteString(AccentStyle.Render(queryInfo))
-		contentBuilder.WriteString("\n\n")
-		// NOTE: No manual divider here - the bubbles/table header has BorderBottom(true)
-		// which renders its own divider line under the column headers
-
-		if m.searching {
-			// Show red spinner when searching
-			contentBuilder.WriteString(m.spinner.View())
-			contentBuilder.WriteString(" ")
-			contentBuilder.WriteString(HintStyle.Render("Searching..."))
-		} else if m.err != nil {
-			// Use predefined style instead of creating new one
-			contentBuilder.WriteString(StatusMsgStyle.Render(fmt.Sprintf(" Error: %v", m.err)))
-		} else {
-			// Render table with full-width selection highlight
-			contentBuilder.WriteString(RenderTableWithSelection(m.table, m.layout))
-		}
+		builder.Table(m.table)
 	}
 
-	// Get the content string
-	content := contentBuilder.String()
-
-	// Calculate available height for main content box
-	// Subtract: footer box (3 lines: 1 content + 2 border) + spacing (1 line) + border overhead (2 lines)
-	mainAvailableHeight := m.layout.ViewportHeight - 6
-	if mainAvailableHeight < 10 {
-		mainAvailableHeight = 10
-	}
-
-	// Pad content to fill available height
-	contentLines := strings.Count(content, "\n")
-	if contentLines < mainAvailableHeight {
-		content += strings.Repeat("\n", mainAvailableHeight-contentLines)
-	}
-
-	// Build result with two-box layout
-	var result strings.Builder
-
-	// First box: Main content (red border)
-	mainBordered := BorderStyle.
-		Width(m.layout.InnerWidth).
-		Height(mainAvailableHeight).
-		Render(content)
-	result.WriteString(mainBordered)
-	result.WriteString("\n") // Spacing between boxes
-
-	// Second box: Help text (white border, 1 row high)
-	var helpText string
-	if m.inputMode {
-		helpText = "Enter: search | Esc: back to main"
-	} else {
-		helpText = "Enter: inspect | /: search | n: next | p: prev | f: filter (1-4) | Esc: back"
-	}
-	textWidth := len(helpText)
-	padding := (m.layout.InnerWidth - textWidth) / 2
-	var footerContent strings.Builder
-	if padding > 0 {
-		footerContent.WriteString(strings.Repeat(" ", padding))
-	}
-	footerContent.WriteString(HintStyle.Render(helpText))
-	// Fill remaining space
-	remaining := m.layout.InnerWidth - padding - textWidth
-	if remaining > 0 {
-		footerContent.WriteString(strings.Repeat(" ", remaining))
-	}
-
-	// Apply white border to footer
-	footerBordered := NewBorderStyleWithColor(colorWhite).
-		Width(m.layout.InnerWidth).
-		Height(1).
-		Render(footerContent.String())
-	result.WriteString(footerBordered)
-
-	return result.String()
+	return builder.Help("Enter: inspect | /: search | n: next | p: prev | f: filter (1-4) | Esc: back").
+		Build()
 }
 
 // doSearch performs the search asynchronously
@@ -392,50 +334,9 @@ func (m DockerHubSearchModel) doSearch() tea.Cmd {
 	}
 }
 
-// calculateDockerHubColumns calculates column widths to fill the given width
-// This ensures the selector highlight spans the full width
+// calculateDockerHubColumns uses the centralized CalculateColumns with DockerHubColumns spec.
 func calculateDockerHubColumns(totalW int) []table.Column {
-	if totalW < 50 {
-		totalW = 50
-	}
-
-	// Fixed column widths for compact columns
-	starsW := 6
-	cachedW := 8                   // For "[nn] ✓" indicator
-	fixedTotal := starsW + cachedW // = 14
-
-	// Flexible columns share remaining space
-	remaining := totalW - fixedTotal
-
-	// Distribute: Name 28%, Publisher 17%, Description 55%
-	nameW := remaining * 28 / 100
-	publisherW := remaining * 17 / 100
-	descW := remaining - nameW - publisherW // Give remainder to description
-
-	// Ensure minimums
-	if nameW < 20 {
-		nameW = 20
-	}
-	if publisherW < 12 {
-		publisherW = 12
-	}
-	if descW < 20 {
-		descW = 20
-	}
-
-	// Verify columns sum to totalW exactly - adjust description
-	actualTotal := nameW + publisherW + starsW + cachedW + descW
-	if actualTotal != totalW {
-		descW += (totalW - actualTotal)
-	}
-
-	return []table.Column{
-		{Title: "Name", Width: nameW},
-		{Title: "Publisher", Width: publisherW},
-		{Title: "Stars", Width: starsW},
-		{Title: "Cached", Width: cachedW},
-		{Title: "Description", Width: descW},
-	}
+	return CalculateColumns(DockerHubColumns(), totalW)
 }
 
 // updateTable updates the table with search results
@@ -518,7 +419,7 @@ func (m *DockerHubSearchModel) updateTable() {
 		// Check if we have cached layer data for this image
 		var cachedStr string
 		if layerCount, ok := m.cachedImages[r.Name]; ok {
-			cachedStr = fmt.Sprintf("[%d] ✓", layerCount)
+			cachedStr = fmt.Sprintf("[%d] Y", layerCount)
 		}
 
 		name := truncate(r.Name, nameW)

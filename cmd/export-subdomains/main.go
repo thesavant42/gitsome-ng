@@ -85,5 +85,5 @@ func main() {
 		fmt.Fprintf(f, "---\n\n")
 	}
 
-	fmt.Printf("✓ Exported to %s\n", filename)
+	fmt.Printf("[OK] Exported to %s\n", filename)
 }
