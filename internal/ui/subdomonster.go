@@ -130,7 +130,7 @@ func NewSubdomonsterModel(logger *log.Logger, database *db.DB) SubdomonsterModel
 
 	layout := DefaultLayout()
 
-	columns := calculateSubdomonsterColumns(layout.TableWidth)
+	columns := calculateSubdomonsterColumns(layout.TableWidth - 4)
 	t := table.New(
 		table.WithColumns(columns),
 		table.WithRows([]table.Row{}),
@@ -177,7 +177,7 @@ func (m SubdomonsterModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		const textInputPadding = 10
 		m.textInput.Width = m.layout.InnerWidth - textInputPadding
 
-		columns := calculateSubdomonsterColumns(m.layout.TableWidth)
+		columns := calculateSubdomonsterColumns(m.layout.TableWidth - 4)
 		m.table.SetColumns(columns)
 		if len(m.sortedSubdomains) > 0 {
 			m.updateTable()
@@ -721,7 +721,7 @@ func (m SubdomonsterModel) View() string {
 	var contentBuilder strings.Builder
 
 	// Title
-	contentBuilder.WriteString(TitleStyle.Render("SubDomonster - Subdomain Enumeration"))
+	contentBuilder.WriteString("  " + TitleStyle.Render("SubDomonster - Subdomain Enumeration"))
 	contentBuilder.WriteString("\n")
 	contentBuilder.WriteString(strings.Repeat("─", m.layout.InnerWidth))
 	contentBuilder.WriteString("\n")
@@ -810,7 +810,7 @@ func (m SubdomonsterModel) renderDomainsView() string {
 	normalStyle := NormalStyle.Width(m.layout.InnerWidth)
 
 	for i, d := range m.cachedDomains {
-		line := fmt.Sprintf("  %s (%d subdomains)", d.Domain, d.SubdomainCount)
+		line := fmt.Sprintf("%s (%d subdomains)", d.Domain, d.SubdomainCount)
 		if i == m.domainCursor {
 			b.WriteString(selectedStyle.Render("> " + line))
 		} else {
@@ -854,7 +854,7 @@ func (m SubdomonsterModel) renderTableView() string {
 	var b strings.Builder
 
 	// Query info
-	queryInfo := fmt.Sprintf(" Domain: %s", m.domain)
+	queryInfo := fmt.Sprintf("  Domain: %s", m.domain)
 	if m.filterText != "" || m.filterSource != "" || m.filterCDX != -1 {
 		queryInfo += "  |  Filters:"
 		if m.filterText != "" {
@@ -877,7 +877,7 @@ func (m SubdomonsterModel) renderTableView() string {
 	currentRow := m.table.Cursor() + 1
 	totalRows := len(m.sortedSubdomains)
 	queryInfo += fmt.Sprintf("  |  Page %d/%d  |  Total: %d  |  Row %d/%d", m.page, maxPage, m.totalSubdomains, currentRow, totalRows)
-	b.WriteString(AccentStyle.Render(queryInfo))
+	b.WriteString(CenterText(AccentStyle.Render(queryInfo), m.layout.InnerWidth))
 	b.WriteString("\n")
 
 	// Table
@@ -1091,7 +1091,7 @@ func reverseStrings(s []string) {
 func (m *SubdomonsterModel) updateTable() {
 	oldCursor := m.table.Cursor()
 
-	columns := calculateSubdomonsterColumns(m.layout.TableWidth)
+	columns := calculateSubdomonsterColumns(m.layout.TableWidth - 4)
 
 	subdomainW := columns[0].Width
 	sourceW := columns[1].Width
@@ -1135,7 +1135,7 @@ func (m *SubdomonsterModel) updateTable() {
 const (
 	subdomonsterSourceWidth  = 12
 	subdomonsterCDXWidth     = 5
-	subdomonsterExpiredWidth = 7
+	subdomonsterExpiredWidth = 9
 	subdomonsterMinSubWidth  = 40
 	subdomonsterMinTotal     = 70
 )
@@ -1163,7 +1163,7 @@ func calculateSubdomonsterColumns(totalW int) []table.Column {
 		{Title: "Subdomain", Width: subdomainW},
 		{Title: "Source", Width: subdomonsterSourceWidth},
 		{Title: "CDX", Width: subdomonsterCDXWidth},
-		{Title: "Expired", Width: subdomonsterExpiredWidth},
+		{Title: "Expired  ", Width: subdomonsterExpiredWidth},
 	}
 }
 

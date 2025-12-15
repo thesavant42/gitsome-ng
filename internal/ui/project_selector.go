@@ -156,7 +156,7 @@ func (m ProjectSelectorModel) View() string {
 	var b strings.Builder
 
 	// Use ViewHeader helper for consistent title + divider
-	b.WriteString(ViewHeader("Select Project", m.layout.InnerWidth))
+	b.WriteString(ViewHeader("  Select Project", m.layout.InnerWidth))
 
 	if m.createMode {
 		b.WriteString("Enter project name:\n\n")
@@ -188,12 +188,20 @@ func (m ProjectSelectorModel) View() string {
 		b.WriteString("\n")
 	}
 
-	// Create New option
-	b.WriteString(RenderListItem("Create New Project", m.cursor == len(m.projects), m.layout.InnerWidth))
+	// Create New option (no bullet, 2-space prefix for frame padding)
+	if m.cursor == len(m.projects) {
+		b.WriteString(RenderSelectedWidth("  Create New Project", m.layout.InnerWidth))
+	} else {
+		b.WriteString(RenderNormal("  Create New Project"))
+	}
 	b.WriteString("\n")
 
-	// Exit option
-	b.WriteString(RenderListItem("Exit", m.cursor == len(m.projects)+1, m.layout.InnerWidth))
+	// Exit option (no bullet, 2-space prefix for frame padding)
+	if m.cursor == len(m.projects)+1 {
+		b.WriteString(RenderSelectedWidth("  Exit", m.layout.InnerWidth))
+	} else {
+		b.WriteString(RenderNormal("  Exit"))
+	}
 	b.WriteString("\n")
 
 	// Use TwoBoxView helper for standard two-box layout

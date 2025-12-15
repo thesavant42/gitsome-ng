@@ -63,6 +63,7 @@ func (m SplashModel) View() string {
 
 	// Calculate center position for text
 	text := "YOLOSINT! by savant42"
+	styledText := RenderTitle(text) // Bright white, bold
 	textWidth := len(text)
 	textLine := squareHeight / 2 // Center vertically
 
@@ -74,7 +75,7 @@ func (m SplashModel) View() string {
 			if padding > 0 {
 				b.WriteString(strings.Repeat(" ", padding))
 			}
-			b.WriteString(text)
+			b.WriteString(styledText)
 			// Fill remaining space
 			remaining := squareWidth - padding - textWidth
 			if remaining > 0 {

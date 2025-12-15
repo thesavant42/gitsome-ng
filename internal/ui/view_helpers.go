@@ -61,7 +61,7 @@ func RenderTableWithSelection(t table.Model, layout Layout) string {
 	for i, line := range lines {
 		// Header row (line 0) - render then add divider
 		if i == 0 {
-			result = append(result, NormalStyle.Render(line))
+			result = append(result, NormalStyle.Render("  "+line))
 			// Add divider after header
 			result = append(result, strings.Repeat("─", layout.InnerWidth))
 			continue
@@ -74,7 +74,7 @@ func RenderTableWithSelection(t table.Model, layout Layout) string {
 		// Apply selection styling to the visible cursor row
 		// Strip escape codes first to prevent embedded reset codes from killing the background
 		if dataRowIndex == visibleCursorIndex {
-			cleanLine := stripEscapeCodes(line)
+			cleanLine := "  " + stripEscapeCodes(line)
 			// Pad line to exact width for selection highlight to ensure full-width selection
 			if StringWidth(cleanLine) < layout.InnerWidth {
 				cleanLine = cleanLine + strings.Repeat(" ", layout.InnerWidth-StringWidth(cleanLine))
@@ -87,7 +87,7 @@ func RenderTableWithSelection(t table.Model, layout Layout) string {
 		}
 
 		// Non-selected data rows - render without width constraint
-		result = append(result, NormalStyle.Render(line))
+		result = append(result, NormalStyle.Render("  "+line))
 	}
 
 	return strings.Join(result, "\n")

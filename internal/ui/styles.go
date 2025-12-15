@@ -868,7 +868,7 @@ func (b borderStyleRenderer) Render(content string) string {
 // RenderCenteredFooter renders a centered help text in a white-bordered footer box.
 // This consolidates the repeated footer rendering pattern across all selector models.
 func RenderCenteredFooter(helpText string, innerWidth int) string {
-	textWidth := len(helpText)
+	textWidth := StringWidth(helpText)
 	padding := (innerWidth - textWidth) / 2
 	var footerContent strings.Builder
 	if padding > 0 {
