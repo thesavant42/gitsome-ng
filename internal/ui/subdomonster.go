@@ -173,7 +173,22 @@ func (m SubdomonsterModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.layout = NewLayout(msg.Width, msg.Height)
-		m.table.SetHeight(m.layout.TableHeight)
+
+		// Calculate height based on actual Subdomonster content
+		titleLine := 1
+		dividerLine := 1
+		spacingLines := 2
+		queryInfoLine := 1
+		tableNewline := 1
+		tableHeaderChrome := 2
+
+		contentOverhead := titleLine + dividerLine + spacingLines + queryInfoLine + tableNewline + tableHeaderChrome
+		tableHeight := m.layout.ViewportHeight - TwoBoxOverhead - contentOverhead
+		if tableHeight < MinTableHeight {
+			tableHeight = MinTableHeight
+		}
+		m.table.SetHeight(tableHeight)
+
 		const textInputPadding = 10
 		m.textInput.Width = m.layout.InnerWidth - textInputPadding
 
@@ -718,39 +733,36 @@ func (m SubdomonsterModel) View() string {
 		return ""
 	}
 
-	var contentBuilder strings.Builder
+	// Use PageViewBuilder to ensure consistent layout structure matching Layout.TableHeight assumptions
+	builder := NewPageView(m.layout).
+		Title("  SubDomonster - Subdomain Enumeration").
+		Divider().
+		Spacing(2)
 
-	// Title
-	contentBuilder.WriteString("  " + TitleStyle.Render("SubDomonster - Subdomain Enumeration"))
-	contentBuilder.WriteString("\n")
-	contentBuilder.WriteString(strings.Repeat("─", m.layout.InnerWidth))
-	contentBuilder.WriteString("\n")
-
+	var viewContent string
 	switch m.viewMode {
 	case subdomonsterViewInput:
-		contentBuilder.WriteString(m.renderInputView())
+		viewContent = m.renderInputView()
 	case subdomonsterViewDomains:
-		contentBuilder.WriteString(m.renderDomainsView())
+		viewContent = m.renderDomainsView()
 	case subdomonsterViewFetching:
-		contentBuilder.WriteString(m.renderFetchingView())
+		viewContent = m.renderFetchingView()
 	case subdomonsterViewTable:
-		contentBuilder.WriteString(m.renderTableView())
+		viewContent = m.renderTableView()
 	case subdomonsterViewFilter:
-		contentBuilder.WriteString(m.renderFilterView())
+		viewContent = m.renderFilterView()
 	case subdomonsterViewSettings:
-		contentBuilder.WriteString(m.renderSettingsView())
+		viewContent = m.renderSettingsView()
 	}
+
+	builder.CustomContent(viewContent)
 
 	// Error message (if any)
 	if m.err != nil {
-		contentBuilder.WriteString(fmt.Sprintf("\n Error: %v", m.err))
+		builder.Error(m.err)
 	}
 
-	content := contentBuilder.String()
-	helpText := m.getHelpText()
-
-	// Use standard two-box layout
-	return BuildTwoBoxView(content, helpText, m.layout)
+	return builder.Help(m.getHelpText()).Build()
 }
 
 func (m SubdomonsterModel) renderInputView() string {
@@ -851,10 +863,8 @@ func (m SubdomonsterModel) renderFetchingView() string {
 }
 
 func (m SubdomonsterModel) renderTableView() string {
-	var b strings.Builder
-
-	// Query info
-	queryInfo := fmt.Sprintf("  Domain: %s", m.domain)
+	// Build query info
+	queryInfo := fmt.Sprintf(" Domain: %s", m.domain)
 	if m.filterText != "" || m.filterSource != "" || m.filterCDX != -1 {
 		queryInfo += "  |  Filters:"
 		if m.filterText != "" {
@@ -877,19 +887,18 @@ func (m SubdomonsterModel) renderTableView() string {
 	currentRow := m.table.Cursor() + 1
 	totalRows := len(m.sortedSubdomains)
 	queryInfo += fmt.Sprintf("  |  Page %d/%d  |  Total: %d  |  Row %d/%d", m.page, maxPage, m.totalSubdomains, currentRow, totalRows)
-	b.WriteString(CenterText(AccentStyle.Render(queryInfo), m.layout.InnerWidth))
-	b.WriteString("\n")
 
-	// Table
-	b.WriteString(RenderTableWithSelection(m.table, m.layout))
+	// Use PageViewBuilder for consistent rendering (matches wayback.go pattern)
+	builder := NewPageView(m.layout).
+		QueryInfo(queryInfo).
+		Table(m.table)
 
-	// Status message
+	// Add status message if present
 	if m.statusMsg != "" {
-		b.WriteString("\n")
-		b.WriteString(NormalStyle.Render(" " + m.statusMsg))
+		builder.Status(m.statusMsg)
 	}
 
-	return b.String()
+	return builder.BuildContent()
 }
 
 func (m SubdomonsterModel) renderFilterView() string {
