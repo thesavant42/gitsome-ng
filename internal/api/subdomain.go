@@ -59,8 +59,8 @@ func (c *SubdomainClient) FetchVirusTotalSubdomains(domain string, cursor string
 		return nil, "", fmt.Errorf("VirusTotal API key not configured")
 	}
 
-	// Build URL
-	reqURL := fmt.Sprintf("%s/domains/%s/subdomains?limit=%d", vtAPIBaseURL, url.PathEscape(domain), vtBatchSize)
+	// Build URL - domain should not be escaped, it's part of the path
+	reqURL := fmt.Sprintf("%s/domains/%s/subdomains?limit=%d", vtAPIBaseURL, domain, vtBatchSize)
 	if cursor != "" {
 		reqURL += "&cursor=" + url.QueryEscape(cursor)
 	}
@@ -95,9 +95,23 @@ func (c *SubdomainClient) FetchVirusTotalSubdomains(domain string, cursor string
 		return nil, "", fmt.Errorf("failed to read response: %w", err)
 	}
 
+	// Debug: check if body is empty or unexpected
+	if len(body) == 0 {
+		return nil, "", fmt.Errorf("empty response from VirusTotal")
+	}
+
 	var vtResp models.VirusTotalSubdomainResponse
 	if err := json.Unmarshal(body, &vtResp); err != nil {
-		return nil, "", fmt.Errorf("failed to parse response: %w", err)
+		return nil, "", fmt.Errorf("failed to parse response (body: %s): %w", string(body[:min(len(body), 200)]), err)
+	}
+
+	// Debug: return error showing raw response if no data
+	if len(vtResp.Data) == 0 {
+		snippet := string(body)
+		if len(snippet) > 500 {
+			snippet = snippet[:500]
+		}
+		return nil, "", fmt.Errorf("VT returned 0 items. Response: %s", snippet)
 	}
 
 	// Convert to Subdomain structs
@@ -110,6 +124,11 @@ func (c *SubdomainClient) FetchVirusTotalSubdomains(domain string, cursor string
 				Source:    "virustotal",
 			})
 		}
+	}
+
+	// If no subdomains found but we got data, log what we got
+	if len(subdomains) == 0 && len(vtResp.Data) > 0 {
+		return nil, "", fmt.Errorf("parsed %d items but 0 matched domain type", len(vtResp.Data))
 	}
 
 	// Get next cursor if available
@@ -409,4 +428,3 @@ func (c *SubdomainClient) ImportPlainTextSubdomains(data []byte, domain string) 
 
 	return subdomains, nil
 }
-

@@ -1,19 +1,22 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/thesavant42/gitsome-ng/internal/db"
 )
 
 func main() {
+	// Parse command line flags
+	dbPath := flag.String("db", "generic.db", "Path to SQLite database")
+	flag.Parse()
+
 	// Open database
-	dbPath := filepath.Join(".", "generic.db")
-	database, err := db.New(dbPath)
+	database, err := db.New(*dbPath)
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}

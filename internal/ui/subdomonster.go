@@ -211,7 +211,12 @@ func (m SubdomonsterModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			// Insert subdomains into database
 			if m.database != nil && len(msg.subdomains) > 0 {
-				inserted, _ := m.database.InsertSubdomains(msg.subdomains)
+				inserted, err := m.database.InsertSubdomains(msg.subdomains)
+				if err != nil {
+					m.err = err
+					m.statusMsg = fmt.Sprintf("DB error inserting subdomains: %v", err)
+					return m, m.loadSubdomainsFromDB()
+				}
 				m.statusMsg = fmt.Sprintf("Found %d subdomains (%d new) via %s", len(msg.subdomains), inserted, msg.source)
 
 				// Mark domain as enumerated
@@ -221,6 +226,8 @@ func (m SubdomonsterModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case "crtsh":
 					m.database.MarkCrtshEnumerated(m.domain)
 				}
+			} else if len(msg.subdomains) == 0 {
+				m.statusMsg = fmt.Sprintf("No subdomains found via %s", msg.source)
 			}
 		}
 		return m, m.loadSubdomainsFromDB()
@@ -317,6 +324,62 @@ func (m SubdomonsterModel) handleInputKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 		m.settingsInput = m.vtAPIKey
 		return m, nil
 
+	case "v":
+		// Enumerate via VirusTotal directly from input view
+		if m.textInput.Value() == "" {
+			m.statusMsg = "Enter a domain first"
+			return m, nil
+		}
+		if !m.client.HasVirusTotalAPIKey() {
+			// Prompt for API key
+			m.viewMode = subdomonsterViewSettings
+			m.settingsEditing = true
+			m.settingsInput = ""
+			m.statusMsg = "Enter your VirusTotal API key:"
+			return m, nil
+		}
+		// Set domain and ensure it exists in database
+		domain := strings.ToLower(strings.TrimSpace(m.textInput.Value()))
+		m.domain = domain
+		m.err = nil
+		if m.database != nil {
+			m.database.InsertTargetDomain(domain)
+		}
+		// Start VirusTotal fetch
+		m.viewMode = subdomonsterViewFetching
+		m.fetching = true
+		m.fetchProgress = 0
+		m.fetchSource = "virustotal"
+		m.fetchCancelled = false
+		m.cancelFetch = make(chan struct{})
+		m.fetchStartTime = time.Now()
+		m.statusMsg = "Fetching subdomains from VirusTotal..."
+		return m, tea.Batch(m.progress.SetPercent(0.0), m.doVirusTotalFetch())
+
+	case "c":
+		// Enumerate via crt.sh directly from input view
+		if m.textInput.Value() == "" {
+			m.statusMsg = "Enter a domain first"
+			return m, nil
+		}
+		// Set domain and ensure it exists in database
+		domain := strings.ToLower(strings.TrimSpace(m.textInput.Value()))
+		m.domain = domain
+		m.err = nil
+		if m.database != nil {
+			m.database.InsertTargetDomain(domain)
+		}
+		// Start crt.sh fetch
+		m.viewMode = subdomonsterViewFetching
+		m.fetching = true
+		m.fetchProgress = 0
+		m.fetchSource = "crtsh"
+		m.fetchCancelled = false
+		m.cancelFetch = make(chan struct{})
+		m.fetchStartTime = time.Now()
+		m.statusMsg = "Fetching subdomains from crt.sh..."
+		return m, tea.Batch(m.progress.SetPercent(0.0), m.doCrtshFetch())
+
 	default:
 		var cmd tea.Cmd
 		m.textInput, cmd = m.textInput.Update(msg)
@@ -361,6 +424,13 @@ func (m SubdomonsterModel) handleDomainsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd
 				return m, m.loadCachedDomains()
 			}
 		}
+
+	case "a", "A":
+		// Add new domain - go to input view
+		m.viewMode = subdomonsterViewInput
+		m.textInput.SetValue("")
+		m.textInput.Focus()
+		return m, textinput.Blink
 	}
 	return m, nil
 }
@@ -398,7 +468,11 @@ func (m SubdomonsterModel) handleTableKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 	case "v":
 		// Enumerate via VirusTotal
 		if !m.client.HasVirusTotalAPIKey() {
-			m.statusMsg = "VirusTotal API key not set. Press Ctrl+S to configure."
+			// Prompt for API key
+			m.viewMode = subdomonsterViewSettings
+			m.settingsEditing = true
+			m.settingsInput = ""
+			m.statusMsg = "Enter your VirusTotal API key:"
 			return m, nil
 		}
 		m.viewMode = subdomonsterViewFetching
@@ -593,10 +667,16 @@ func (m SubdomonsterModel) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cm
 				if err := m.database.SetVirusTotalAPIKey(m.vtAPIKey); err != nil {
 					m.statusMsg = fmt.Sprintf("API key set but failed to save: %v", err)
 				} else {
-					m.statusMsg = "VirusTotal API key saved"
+					m.statusMsg = "VirusTotal API key saved. Press V to fetch."
 				}
 			} else {
 				m.statusMsg = "VirusTotal API key set (not persisted - no database)"
+			}
+			// Return to table view
+			if m.domain != "" {
+				m.viewMode = subdomonsterViewTable
+			} else {
+				m.viewMode = subdomonsterViewInput
 			}
 			return m, nil
 
@@ -644,7 +724,7 @@ func (m SubdomonsterModel) View() string {
 	contentBuilder.WriteString(TitleStyle.Render("SubDomonster - Subdomain Enumeration"))
 	contentBuilder.WriteString("\n")
 	contentBuilder.WriteString(strings.Repeat("─", m.layout.InnerWidth))
-	contentBuilder.WriteString("\n\n")
+	contentBuilder.WriteString("\n")
 
 	switch m.viewMode {
 	case subdomonsterViewInput:
@@ -759,17 +839,6 @@ func (m SubdomonsterModel) renderFetchingView() string {
 	}
 	b.WriteString("\n\n")
 
-	// Progress bar (indeterminate)
-	progressBarWidth := m.layout.InnerWidth - 4
-	if progressBarWidth < 40 {
-		progressBarWidth = 40
-	}
-	m.progress.Width = progressBarWidth
-	b.WriteString(" ")
-	b.WriteString(m.progress.View())
-	b.WriteString("\n")
-
-	b.WriteString("\n")
 	b.WriteString(HintStyle.Render(" Esc: cancel"))
 
 	// Status message
@@ -876,9 +945,9 @@ func (m SubdomonsterModel) renderSettingsView() string {
 func (m SubdomonsterModel) getHelpText() string {
 	switch m.viewMode {
 	case subdomonsterViewInput:
-		return "Enter: search | Tab: browse cached | Ctrl-S: settings | Esc: back"
+		return "Enter: search | v: VirusTotal | c: crt.sh | Tab: browse cached | Ctrl-S: settings | Esc: back"
 	case subdomonsterViewDomains:
-		return "Enter: select | d: delete domain | j/k: navigate | Esc: back"
+		return "Enter: select | a: add domain | d: delete domain | j/k: navigate | Esc: back"
 	case subdomonsterViewFetching:
 		return "Esc: cancel fetch"
 	case subdomonsterViewTable:
