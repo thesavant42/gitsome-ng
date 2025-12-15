@@ -183,7 +183,7 @@ func (m SubdomonsterModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		tableHeaderChrome := 2
 
 		contentOverhead := titleLine + dividerLine + spacingLines + queryInfoLine + tableNewline + tableHeaderChrome
-		tableHeight := m.layout.ViewportHeight - TwoBoxOverhead - contentOverhead
+		tableHeight := m.layout.ViewportHeight - TwoBoxOverhead - contentOverhead + 1
 		if tableHeight < MinTableHeight {
 			tableHeight = MinTableHeight
 		}
@@ -892,11 +892,6 @@ func (m SubdomonsterModel) renderTableView() string {
 	builder := NewPageView(m.layout).
 		QueryInfo(queryInfo).
 		Table(m.table)
-
-	// Add status message if present
-	if m.statusMsg != "" {
-		builder.Status(m.statusMsg)
-	}
 
 	return builder.BuildContent()
 }
