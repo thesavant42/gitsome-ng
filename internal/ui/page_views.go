@@ -71,9 +71,9 @@ func (b *PageViewBuilder) Spacing(lines int) *PageViewBuilder {
 	return b
 }
 
-// QueryInfo adds query/filter information line (accented yellow).
+// QueryInfo adds query/filter information line (accented yellow), centered.
 func (b *PageViewBuilder) QueryInfo(info string) *PageViewBuilder {
-	b.content.WriteString(AccentStyle.Render(info))
+	b.content.WriteString(CenterText(AccentStyle.Render(info), b.layout.InnerWidth))
 	b.content.WriteString("\n")
 	b.hadContent = true
 	return b

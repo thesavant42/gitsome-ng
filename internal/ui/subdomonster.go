@@ -177,13 +177,13 @@ func (m SubdomonsterModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Calculate height based on actual Subdomonster content
 		titleLine := 1
 		dividerLine := 1
-		spacingLines := 2
 		queryInfoLine := 1
 		tableNewline := 1
 		tableHeaderChrome := 2
 
-		contentOverhead := titleLine + dividerLine + spacingLines + queryInfoLine + tableNewline + tableHeaderChrome
-		tableHeight := m.layout.ViewportHeight - TwoBoxOverhead - contentOverhead + 1
+		contentOverhead := titleLine + dividerLine + queryInfoLine + tableNewline + tableHeaderChrome
+		const statusRowRemoved = 1
+		tableHeight := m.layout.ViewportHeight - TwoBoxOverhead - contentOverhead + statusRowRemoved
 		if tableHeight < MinTableHeight {
 			tableHeight = MinTableHeight
 		}
@@ -736,8 +736,7 @@ func (m SubdomonsterModel) View() string {
 	// Use PageViewBuilder to ensure consistent layout structure matching Layout.TableHeight assumptions
 	builder := NewPageView(m.layout).
 		Title("  SubDomonster - Subdomain Enumeration").
-		Divider().
-		Spacing(2)
+		Divider()
 
 	var viewContent string
 	switch m.viewMode {

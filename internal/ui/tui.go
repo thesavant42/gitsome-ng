@@ -3689,12 +3689,10 @@ func (m TUIModel) renderMenu() string {
 			menuContent.WriteString("\n")
 			continue
 		}
-		// Section header - label above divider
+		// Section header - label only, no divider
 		if strings.HasPrefix(option, "---") {
 			label := strings.TrimPrefix(option, "---")
 			menuContent.WriteString(NormalStyle.Render(label))
-			menuContent.WriteString("\n")
-			menuContent.WriteString(strings.Repeat("─", m.layout.InnerWidth))
 			menuContent.WriteString("\n")
 			continue
 		}
